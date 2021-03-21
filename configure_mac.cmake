@@ -11,16 +11,16 @@ cmake_minimum_required(VERSION 3.5)
 ########################################################
 
 # To ensure reproducible builds, pin to a specific vcpkg commit
-set(VCPKG_COMMIT_SHA "e25b620cf90d9bb311f91b03916b75d8798afd44")
+set(VCPKG_COMMIT_SHA "a3c09743dcd4a926c57ba0013c1b967014a71682")
 
 # WZ minimum supported macOS deployment target (this is 10.10 because of Qt 5.9.x)
 set(MIN_SUPPORTED_MACOSX_DEPLOYMENT_TARGET "10.10")
 
 # Vulkan SDK
-set(VULKAN_SDK_VERSION "1.2.162.1")
+set(VULKAN_SDK_VERSION "1.2.170.0")
 set(VULKAN_SDK_DL_FILENAME "vulkansdk-macos-${VULKAN_SDK_VERSION}.dmg")
 set(VULKAN_SDK_DL_URL "https://sdk.lunarg.com/sdk/download/${VULKAN_SDK_VERSION}/mac/${VULKAN_SDK_DL_FILENAME}?Human=true")
-set(VULKAN_SDK_DL_SHA256 "2781c334997598c2828d8a3368aef7b7c94a25204c90d5503396e40c7a03fd5c")
+set(VULKAN_SDK_DL_SHA256 "5c7264a66c57918f617d2b62dc062fd8c0a671915819b4c9420cd431e7808729")
 
 ########################################################
 
