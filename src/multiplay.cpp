@@ -97,7 +97,6 @@ char								playerName[MAX_PLAYERS][MAX_STR_LENGTH];	//Array to store all player
 static bool recvBeacon(NETQUEUE queue);
 static bool recvResearch(NETQUEUE queue);
 
-bool multiplayPlayersReady(bool bNotifyStatus);
 void startMultiplayerGame();
 
 // ////////////////////////////////////////////////////////////////////////////
@@ -787,28 +786,6 @@ bool recvMessage()
 				ingame.JoiningInProgress[player_id] = false;
 				break;
 			}
-		// FIXME: the next 5 cases might not belong here --check (we got two loops for this)
-		case NET_COLOURREQUEST:
-			recvColourRequest(queue);
-			break;
-		case NET_FACTIONREQUEST:
-			recvFactionRequest(queue);
-			break;
-		case NET_POSITIONREQUEST:
-			recvPositionRequest(queue);
-			break;
-		case NET_TEAMREQUEST:
-			recvTeamRequest(queue);
-			break;
-		case NET_READY_REQUEST:
-			recvReadyRequest(queue);
-
-			// if hosting try to start the game if everyone is ready
-			if (NetPlay.isHost && multiplayPlayersReady(false))
-			{
-				startMultiplayerGame();
-			}
-			break;
 		case GAME_ALLIANCE:
 			recvAlliance(queue, true);
 			break;

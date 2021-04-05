@@ -28,6 +28,7 @@
 #include "lib/netplay/netplay.h"
 #include "lib/widget/widgbase.h"
 #include "lib/widget/form.h"
+#include "lib/widget/button.h"
 #include <functional>
 #include <vector>
 #include "lib/framework/wzstring.h"
@@ -59,11 +60,11 @@ void updateStructureDisabledFlags();
 
 void intDisplayFeBox(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset);
 
-bool addMultiBut(WIDGET &parent, UDWORD id, UDWORD x, UDWORD y, UDWORD width, UDWORD height, const char *tipres, UDWORD norm, UDWORD down, UDWORD hi, unsigned tc = MAX_PLAYERS);
+std::shared_ptr<W_BUTTON> addMultiBut(WIDGET &parent, UDWORD id, UDWORD x, UDWORD y, UDWORD width, UDWORD height, const char *tipres, UDWORD norm, UDWORD down, UDWORD hi, unsigned tc = MAX_PLAYERS);
 /**
  * @deprecated use `addMultiBut(WIDGET &parent, UDWORD id, UDWORD x, UDWORD y, UDWORD width, UDWORD height, const char *tipres, UDWORD norm, UDWORD down, UDWORD hi, unsigned tc = MAX_PLAYERS)` instead
  **/
-bool addMultiBut(const std::shared_ptr<W_SCREEN> &screen, UDWORD formid, UDWORD id, UDWORD x, UDWORD y, UDWORD width, UDWORD height, const char *tipres, UDWORD norm, UDWORD down, UDWORD hi, unsigned tc = MAX_PLAYERS);
+std::shared_ptr<W_BUTTON> addMultiBut(const std::shared_ptr<W_SCREEN> &screen, UDWORD formid, UDWORD id, UDWORD x, UDWORD y, UDWORD width, UDWORD height, const char *tipres, UDWORD norm, UDWORD down, UDWORD hi, unsigned tc = MAX_PLAYERS);
 
 Image mpwidgetGetFrontHighlightImage(Image image);
 bool changeColour(unsigned player, int col, bool isHost);
@@ -134,11 +135,11 @@ void displayRoomNotifyMessage(char const *text);
 // GAME OPTIONS SCREEN
 
 #define MULTIOP_PLAYERS			10231
-#define MULTIOP_PLAYERSX		360
+#define MULTIOP_PLAYERSX		323
 #define MULTIOP_PLAYERSY		1
 #define MULTIOP_PLAYER_START	10232		//list of players
 #define MULTIOP_PLAYER_END		10249
-#define MULTIOP_PLAYERSW		263
+#define MULTIOP_PLAYERSW		298
 #define MULTIOP_PLAYERSH		380
 
 #define MULTIOP_ROW_WIDTH		246
@@ -163,7 +164,7 @@ void displayRoomNotifyMessage(char const *text);
 #define MULTIOP_READY_WIDTH			41
 #define MULTIOP_READY_HEIGHT		38
 
-#define MULTIOP_PLAYERWIDTH		245
+#define MULTIOP_PLAYERWIDTH		282
 #define	MULTIOP_PLAYERHEIGHT	38
 
 #define MULTIOP_OPTIONS			10250

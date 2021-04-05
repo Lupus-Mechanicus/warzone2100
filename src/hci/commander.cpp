@@ -30,10 +30,14 @@ void CommanderController::updateCommandersList()
 
 STRUCTURE_STATS *CommanderController::getObjectStatsAt(size_t objectIndex) const
 {
-	auto droid = getObjectAt(objectIndex);
-	ASSERT_NOT_NULLPTR_OR_RETURN(nullptr, droid);
-	auto assignedFactory = droidGetCommandFactory(droid);
+	auto assignedFactory = getAssignedFactoryAt(objectIndex);
 	return assignedFactory == nullptr ? nullptr : assignedFactory->pStructureType;
+}
+
+STRUCTURE *CommanderController::getAssignedFactoryAt(size_t objectIndex) const
+{
+	auto droid = getObjectAt(objectIndex);
+	return droid == nullptr ? nullptr : droidGetCommandFactory(droid);
 }
 
 void CommanderController::refresh()
@@ -191,8 +195,8 @@ protected:
 	void display(int xOffset, int yOffset) override
 	{
 		updateLayout();
-		auto stat = getStats();
-		displayIMD(Image(), stat ? ImdObject::StructureStat(stat): ImdObject::Component(nullptr), xOffset, yOffset);
+		auto factory = controller->getAssignedFactoryAt(objectIndex);
+		displayIMD(Image(), factory ? ImdObject::Structure(factory): ImdObject::Component(nullptr), xOffset, yOffset);
 		displayIfHighlight(xOffset, yOffset);
 	}
 

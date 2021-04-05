@@ -194,6 +194,7 @@ bool multiintDisableLobbyRefresh = false; // if we allow lobby to be refreshed o
 static UDWORD hideTime = 0;
 static uint8_t playerVotes[MAX_PLAYERS];
 LOBBY_ERROR_TYPES LobbyError = ERROR_NOERROR;
+static bool bInActualHostedLobby = false;
 /// end of globals.
 // ////////////////////////////////////////////////////////////////////////////
 // Function protos
@@ -250,6 +251,9 @@ static int difficultyIcon(int difficulty);
 static void sendRoomChatMessage(char const *text);
 
 static int factionIcon(FactionID faction);
+
+static bool multiplayPlayersReady();
+static bool multiplayIsStartingGame();
 // ////////////////////////////////////////////////////////////////////////////
 // map previews..
 
@@ -2459,19 +2463,29 @@ static void drawReadyButton(UDWORD player)
 	int disallow = allPlayersOnSameTeam(-1);
 
 	// delete 'ready' botton form
-	widgDelete(psWScreen, MULTIOP_READY_FORM_ID + player);
-
-	// add form to hold 'ready' botton
-	addBlueForm(MULTIOP_PLAYERS, MULTIOP_READY_FORM_ID + player,
-	            7 + MULTIOP_PLAYERWIDTH - MULTIOP_READY_WIDTH,
-	            playerBoxHeight(player),
-	            MULTIOP_READY_WIDTH, MULTIOP_READY_HEIGHT);
-
 	WIDGET *parent = widgGetFromID(psWScreen, MULTIOP_READY_FORM_ID + player);
 
+	if (!parent)
+	{
+		// add form to hold 'ready' botton
+		parent = addBlueForm(MULTIOP_PLAYERS, MULTIOP_READY_FORM_ID + player,
+					7 + MULTIOP_PLAYERWIDTH - MULTIOP_READY_WIDTH,
+					playerBoxHeight(player),
+					MULTIOP_READY_WIDTH, MULTIOP_READY_HEIGHT);
+	}
+
+
+	auto deleteExistingReadyButton = [player]() {
+		widgDelete(widgGetFromID(psWScreen, MULTIOP_READY_START + player));
+		widgDelete(widgGetFromID(psWScreen, MULTIOP_READY_START + MAX_PLAYERS + player)); // "Ready?" text label
+	};
+	auto deleteExistingDifficultyButton = [player]() {
+		widgDelete(widgGetFromID(psWScreen, MULTIOP_DIFFICULTY_INIT_START + player));
+	};
 
 	if (!NetPlay.players[player].allocated && NetPlay.players[player].ai >= 0)
 	{
+		deleteExistingReadyButton();
 		int playerDifficulty = static_cast<int8_t>(NetPlay.players[player].difficulty);
 		int icon = difficultyIcon(playerDifficulty);
 		char tooltip[128 + 255];
@@ -2488,11 +2502,17 @@ static void drawReadyButton(UDWORD player)
 	}
 	else if (!NetPlay.players[player].allocated)
 	{
-		return;	// closed or open
+		// closed or open - remove ready / difficulty button
+		deleteExistingReadyButton();
+		deleteExistingDifficultyButton();
+		return;
 	}
 
 	if (disallow != -1)
 	{
+		// remove ready / difficulty button
+		deleteExistingReadyButton();
+		deleteExistingDifficultyButton();
 		return;
 	}
 
@@ -2502,12 +2522,24 @@ static void drawReadyButton(UDWORD player)
 	unsigned images[2][3] = {{IMAGE_CHECK_OFF, IMAGE_CHECK_ON, IMAGE_CHECK_DOWNLOAD}, {IMAGE_CHECK_OFF_HI, IMAGE_CHECK_ON_HI, IMAGE_CHECK_DOWNLOAD_HI}};
 
 	// draw 'ready' button
-	addMultiBut(psWScreen, MULTIOP_READY_FORM_ID + player, MULTIOP_READY_START + player, 3, 10, MULTIOP_READY_WIDTH, MULTIOP_READY_HEIGHT,
+	auto pReadyBut = addMultiBut(psWScreen, MULTIOP_READY_FORM_ID + player, MULTIOP_READY_START + player, 3, 10, MULTIOP_READY_WIDTH, MULTIOP_READY_HEIGHT,
 	            toolTips[isMe][isReady], images[0][isReady], images[0][isReady], images[isMe][isReady]);
+	ASSERT_OR_RETURN(, pReadyBut != nullptr, "Failed to create ready button");
+	pReadyBut->minClickInterval = GAME_TICKS_PER_SEC;
+	pReadyBut->unlock();
 
-	auto label = std::make_shared<W_LABEL>();
-	parent->attach(label);
-	label->id = MULTIOP_READY_START + MAX_PLAYERS + player;
+	std::shared_ptr<W_LABEL> label;
+	auto existingLabel = widgFormGetFromID(parent->shared_from_this(), MULTIOP_READY_START + MAX_PLAYERS + player);
+	if (existingLabel)
+	{
+		label = std::dynamic_pointer_cast<W_LABEL>(existingLabel);
+	}
+	if (label == nullptr)
+	{
+		label = std::make_shared<W_LABEL>();
+		parent->attach(label);
+		label->id = MULTIOP_READY_START + MAX_PLAYERS + player;
+	}
 	label->setGeometry(0, 0, MULTIOP_READY_WIDTH, 17);
 	label->setTextAlignment(WLAB_ALIGNBOTTOM);
 	label->setFont(font_small, WZCOL_TEXT_BRIGHT);
@@ -2552,7 +2584,8 @@ void WzMultiplayerOptionsTitleUI::addPlayerBox(bool players)
 		psWidget->setGeometry(MULTIOP_PLAYERSX, MULTIOP_PLAYERSY, MULTIOP_PLAYERSW, MULTIOP_PLAYERSH);
 	}));
 
-	addSideText(FRONTEND_SIDETEXT2, MULTIOP_PLAYERSX - 3, MULTIOP_PLAYERSY, _("PLAYERS"));
+	W_LABEL* pPlayersLabel = addSideText(FRONTEND_SIDETEXT2, MULTIOP_PLAYERSX - 3, MULTIOP_PLAYERSY, _("PLAYERS"));
+	pPlayersLabel->hide(); // hide for now
 
 	if (players)
 	{
@@ -2989,6 +3022,8 @@ static void disableMultiButs()
 ////////////////////////////////////////////////////////////////////////////
 static void stopJoining(std::shared_ptr<WzTitleUI> parent)
 {
+	bInActualHostedLobby = false;
+
 	reloadMPConfig(); // reload own settings
 	cancelOrDismissNotificationsWithTag(VOTE_TAG);
 
@@ -3323,17 +3358,18 @@ static void swapPlayerColours(uint32_t player1, uint32_t player2)
  */
 static void resetPlayerConfiguration(const bool bShouldResetLocal = false)
 {
+	auto selectedPlayerPosition = bShouldResetLocal? 0: NetPlay.players[selectedPlayer].position;
 	for (unsigned playerIndex = 0; playerIndex < MAX_PLAYERS_IN_GUI; playerIndex++)
 	{
 		setPlayerColour(playerIndex, playerIndex);
 		swapPlayerColours(playerIndex, rand() % (playerIndex + 1));
+		NetPlay.players[playerIndex].position = playerIndex;
 
 		if (!bShouldResetLocal && playerIndex == selectedPlayer)
 		{
 			continue;
 		}
 
-		NetPlay.players[playerIndex].position = playerIndex;
 		NetPlay.players[playerIndex].team = playerIndex / playersPerTeam();
 
 		if (NetPlay.bComms)
@@ -3350,6 +3386,10 @@ static void resetPlayerConfiguration(const bool bShouldResetLocal = false)
 			/* ensure all players have a name in One Player Skirmish games */
 			sstrcpy(NetPlay.players[playerIndex].name, getAIName(playerIndex));
 		}
+	}
+
+	if (!bShouldResetLocal && selectedPlayerPosition < game.maxPlayers && selectedPlayer != selectedPlayerPosition) {
+		std::swap(NetPlay.players[selectedPlayer].position, NetPlay.players[selectedPlayerPosition].position);
 	}
 
 	sstrcpy(NetPlay.players[selectedPlayer].name, sPlayer);
@@ -3567,6 +3607,8 @@ bool WzMultiplayerOptionsTitleUI::startHost()
 		displayRoomSystemMessage(_("Sorry! Failed to host the game."));
 		return false;
 	}
+
+	bInActualHostedLobby = true;
 
 	widgDelete(psWScreen, MULTIOP_REFRESH);
 	widgDelete(psWScreen, MULTIOP_HOST);
@@ -3877,10 +3919,13 @@ void WzMultiplayerOptionsTitleUI::processMultiopWidgets(UDWORD id)
 
 		if (player == selectedPlayer && positionChooserUp < 0)
 		{
+			// Lock the "ready" button (until the request is processed)
+			widgSetButtonState(psWScreen, id, WBUT_LOCK);
+
 			SendReadyRequest(selectedPlayer, !NetPlay.players[player].ready);
 
 			// if hosting try to start the game if everyone is ready
-			if (NetPlay.isHost && multiplayPlayersReady(false))
+			if (NetPlay.isHost && multiplayPlayersReady())
 			{
 				startMultiplayerGame();
 				// reset flag in case people dropped/quit on join screen
@@ -4033,6 +4078,7 @@ void WzMultiplayerOptionsTitleUI::frontendMultiMessages(bool running)
 {
 	NETQUEUE queue;
 	uint8_t type;
+	bool ignoredMessage = false;
 
 	while (NETrecvNet(&queue, &type))
 	{
@@ -4072,6 +4118,7 @@ void WzMultiplayerOptionsTitleUI::frontendMultiMessages(bool running)
 
 		case NET_OPTIONS:					// incoming options file.
 			recvOptions(queue);
+			bInActualHostedLobby = true;
 			ingame.localOptionsReceived = true;
 
 			if (std::dynamic_pointer_cast<WzMultiplayerOptionsTitleUI>(wzTitleUICurrent))
@@ -4087,26 +4134,51 @@ void WzMultiplayerOptionsTitleUI::frontendMultiMessages(bool running)
 			break;
 
 		case NET_COLOURREQUEST:
+			if (multiplayIsStartingGame())
+			{
+				ignoredMessage = true;
+				break;
+			}
 			recvColourRequest(queue);
 			break;
 
 		case NET_FACTIONREQUEST:
+			if (multiplayIsStartingGame())
+			{
+				ignoredMessage = true;
+				break;
+			}
 			recvFactionRequest(queue);
 			break;
 
 		case NET_POSITIONREQUEST:
+			if (multiplayIsStartingGame())
+			{
+				ignoredMessage = true;
+				break;
+			}
 			recvPositionRequest(queue);
 			break;
 
 		case NET_TEAMREQUEST:
+			if (multiplayIsStartingGame())
+			{
+				ignoredMessage = true;
+				break;
+			}
 			recvTeamRequest(queue);
 			break;
 
 		case NET_READY_REQUEST:
+			if (multiplayIsStartingGame())
+			{
+				ignoredMessage = true;
+				break;
+			}
 			recvReadyRequest(queue);
 
 			// If hosting and game not yet started, try to start the game if everyone is ready.
-			if (NetPlay.isHost && multiplayPlayersReady(false))
+			if (NetPlay.isHost && multiplayPlayersReady())
 			{
 				startMultiplayerGame();
 			}
@@ -4283,8 +4355,13 @@ void WzMultiplayerOptionsTitleUI::frontendMultiMessages(bool running)
 			break;
 
 		default:
-			debug(LOG_ERROR, "Didn't handle %s message!", messageTypeToString(type));
+			ignoredMessage = true;
 			break;
+		}
+
+		if (ignoredMessage)
+		{
+			debug(LOG_ERROR, "Didn't handle %s message!", messageTypeToString(type));
 		}
 
 		NETpop(queue);
@@ -4497,7 +4574,10 @@ TITLECODE WzMultiplayerOptionsTitleUI::run()
 			WidgetTriggers const &triggers = widgRunScreen(psWScreen);
 			unsigned id = triggers.empty() ? 0 : triggers.front().widget->id; // Just use first click here, since the next click could be on another menu.
 
-			processMultiopWidgets(id);
+			if (!triggers.empty() && (!multiplayIsStartingGame() || id == CON_CANCEL))
+			{
+				processMultiopWidgets(id);
+			}
 		}
 	}
 
@@ -4534,6 +4614,7 @@ WzMultiplayerOptionsTitleUI::WzMultiplayerOptionsTitleUI(std::shared_ptr<WzTitle
 WzMultiplayerOptionsTitleUI::~WzMultiplayerOptionsTitleUI()
 {
 	widgRemoveOverlayScreen(psInlineChooserOverlayScreen);
+	bInActualHostedLobby = false;
 }
 
 void WzMultiplayerOptionsTitleUI::screenSizeDidChange(unsigned int oldWidth, unsigned int oldHeight, unsigned int newWidth, unsigned int newHeight)
@@ -5178,50 +5259,66 @@ static bool addMultiEditBox(UDWORD formid, UDWORD id, UDWORD x, UDWORD y, char c
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
-bool addMultiBut(WIDGET &parent, UDWORD id, UDWORD x, UDWORD y, UDWORD width, UDWORD height, const char *tipres, UDWORD norm, UDWORD down, UDWORD hi, unsigned tc)
+std::shared_ptr<W_BUTTON> addMultiBut(WIDGET &parent, UDWORD id, UDWORD x, UDWORD y, UDWORD width, UDWORD height, const char *tipres, UDWORD norm, UDWORD down, UDWORD hi, unsigned tc)
 {
-	auto button = std::make_shared<WzMultiButton>();
-	parent.attach(button);
-	button->id = id;
+	std::shared_ptr<WzMultiButton> button;
+	auto existingWidget = widgFormGetFromID(parent.shared_from_this(), id);
+	if (existingWidget)
+	{
+		button = std::dynamic_pointer_cast<WzMultiButton>(existingWidget);
+	}
+	if (button == nullptr)
+	{
+		button = std::make_shared<WzMultiButton>();
+		parent.attach(button);
+		button->id = id;
+	}
 	button->setGeometry(x, y, width, height);
 	button->setTip((tipres != nullptr) ? std::string(tipres) : std::string());
 	button->imNormal = Image(FrontImages, norm);
 	button->imDown = Image(FrontImages, down);
 	button->doHighlight = hi;
 	button->tc = tc;
-	return true;
+	return button;
 }
 
-bool addMultiBut(const std::shared_ptr<W_SCREEN> &screen, UDWORD formid, UDWORD id, UDWORD x, UDWORD y, UDWORD width, UDWORD height, const char *tipres, UDWORD norm, UDWORD down, UDWORD hi, unsigned tc)
+std::shared_ptr<W_BUTTON> addMultiBut(const std::shared_ptr<W_SCREEN> &screen, UDWORD formid, UDWORD id, UDWORD x, UDWORD y, UDWORD width, UDWORD height, const char *tipres, UDWORD norm, UDWORD down, UDWORD hi, unsigned tc)
 {
 	return addMultiBut(*widgGetFromID(screen, formid), id, x, y, width, height, tipres, norm, down, hi, tc);
 }
 
-/* Returns true if all human players clicked on the 'ready' button */
-bool multiplayPlayersReady(bool bNotifyStatus)
+/* Returns true if the multiplayer game can start (i.e. all players are ready) */
+static bool multiplayPlayersReady()
 {
-	unsigned int	player, playerID;
-	bool			bReady;
+	bool bReady = true;
+	size_t numReadyPlayers = 0;
 
-	bReady = true;
-
-	for (player = 0; player < game.maxPlayers; player++)
+	for (unsigned int player = 0; player < game.maxPlayers; player++)
 	{
 		// check if this human player is ready, ignore AIs
-		if (NetPlay.players[player].allocated && (!NetPlay.players[player].ready || ingame.PingTimes[player] >= PING_LIMIT))
+		if (NetPlay.players[player].allocated)
 		{
-			if (bNotifyStatus)
+			if ((!NetPlay.players[player].ready || ingame.PingTimes[player] >= PING_LIMIT))
 			{
-				for (playerID = 0; playerID <= game.maxPlayers && playerID != player; playerID++) ;
-
-				console("%s is not ready", getPlayerName(playerID));
+				bReady = false;
 			}
-
-			bReady = false;
+			else
+			{
+				numReadyPlayers++;
+			}
+		}
+		else if (NetPlay.players[player].ai >= 0)
+		{
+			numReadyPlayers++;
 		}
 	}
 
-	return bReady;
+	return bReady && numReadyPlayers > 0;
+}
+
+static bool multiplayIsStartingGame()
+{
+	return bInActualHostedLobby && multiplayPlayersReady();
 }
 
 void sendRoomSystemMessage(char const *text)

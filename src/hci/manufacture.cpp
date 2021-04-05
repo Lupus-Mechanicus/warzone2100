@@ -24,7 +24,7 @@ static uint8_t getProductionLoops(STRUCTURE *structure)
 
 	auto psFactory = getFactoryOrNullptr(structure);
 	ASSERT_NOT_NULLPTR_OR_RETURN(0, psFactory);
-	return psFactory->psSubject == nullptr ? 0 : psFactory->productionLoops;
+	return psFactory->productionLoops;
 }
 
 static std::shared_ptr<W_LABEL> makeProductionRunSizeLabel()
@@ -100,6 +100,8 @@ static inline bool compareFactories(STRUCTURE *a, STRUCTURE *b)
 	ASSERT_NOT_NULLPTR_OR_RETURN(false, x);
 	auto y = getFactoryOrNullptr(b);
 	ASSERT_NOT_NULLPTR_OR_RETURN(false, y);
+	ASSERT_NOT_NULLPTR_OR_RETURN(false, x->psAssemblyPoint);
+	ASSERT_NOT_NULLPTR_OR_RETURN(false, y->psAssemblyPoint);
 	if (x->psAssemblyPoint->factoryType != y->psAssemblyPoint->factoryType)
 	{
 		return x->psAssemblyPoint->factoryType < y->psAssemblyPoint->factoryType;
@@ -138,9 +140,7 @@ void ManufactureController::updateManufactureOptionsList()
 DROID_TEMPLATE *ManufactureController::getObjectStatsAt(size_t objectIndex) const
 {
 	auto factory = getFactoryOrNullptr(getObjectAt(objectIndex));
-	ASSERT_NOT_NULLPTR_OR_RETURN(nullptr, factory);
-
-	return factory->psSubject;
+	return factory == nullptr ? nullptr : factory->psSubject;
 }
 
 void ManufactureController::refresh()
@@ -198,7 +198,7 @@ public:
 		controller->clearStructureSelection();
 		controller->selectObject(controller->getObjectAt(objectIndex));
 		jump();
-		controller->displayStatsForm();
+		BaseStatsController::scheduleDisplayStatsForm(controller);
 	}
 
 protected:
@@ -223,6 +223,11 @@ protected:
 		BaseWidget::updateLayout();
 		auto factory = getFactoryOrNullptr(controller->getObjectAt(objectIndex));
 		ASSERT_NOT_NULLPTR_OR_RETURN(, factory);
+		if (factory->psAssemblyPoint == nullptr)
+		{
+			factoryNumberLabel->setString("");
+			return;
+		}
 		factoryNumberLabel->setString(WzString::fromUtf8(astringf("%u", factory->psAssemblyPoint->factoryInc + 1)));
 	}
 
@@ -368,7 +373,7 @@ private:
 		controller->releaseFactoryProduction(factory);
 		controller->clearStructureSelection();
 		controller->selectObject(factory);
-		controller->displayStatsForm();
+		BaseStatsController::scheduleDisplayStatsForm(controller);
 	}
 
 	void clickSecondary() override
@@ -379,7 +384,7 @@ private:
 		controller->cancelFactoryProduction(factory);
 		controller->setHighlightedObject(factory);
 		controller->refresh();
-		controller->displayStatsForm();
+		BaseStatsController::scheduleDisplayStatsForm(controller);
 	}
 
 	std::shared_ptr<ManufactureController> controller;
@@ -432,12 +437,12 @@ private:
 		attach(productionRunSizeLabel = makeProductionRunSizeLabel());
 	}
 
-	void updateProductionRunSizeLabel(STRUCTURE *factory, DROID_TEMPLATE *droidTemplate)
+	void updateProductionRunSizeLabel(STRUCTURE *structure, DROID_TEMPLATE *droidTemplate)
 	{
-		auto production = getProduction(factory, droidTemplate);
-		if (StructureIsManufacturingPending(factory) && production.isValid())
+		auto production = getProduction(structure, droidTemplate);
+		if (production.isValid())
 		{
-			auto productionLoops = getProductionLoops(factory);
+			auto productionLoops = getProductionLoops(structure);
 			auto labelText = astringf(productionLoops > 0 ? "%d/%d" : "%d", production.numRemaining(), production.quantity);
 			productionRunSizeLabel->setString(WzString::fromUtf8(labelText));
 			productionRunSizeLabel->show();
@@ -466,7 +471,8 @@ private:
 
 	uint32_t getCost() override
 	{
-		return calcTemplatePower(getStats());
+		DROID_TEMPLATE* psTemplate = getStats();
+		return psTemplate ? calcTemplatePower(psTemplate) : 0;
 	}
 
 	void clickPrimary() override

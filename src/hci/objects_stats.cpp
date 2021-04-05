@@ -84,10 +84,23 @@ void BaseStatsController::displayStatsForm()
 {
 	if (widgGetFromID(psWScreen, IDSTAT_FORM) == nullptr)
 	{
-		psWScreen->psForm->attach(makeStatsForm());
+		auto newStatsForm = makeStatsForm();
+		psWScreen->psForm->attach(newStatsForm);
 		intMode = INT_STAT;
 		setSecondaryWindowUp(true);
 	}
+}
+
+// To be called from within widget click & run handlers / functions
+void BaseStatsController::scheduleDisplayStatsForm(const std::shared_ptr<BaseStatsController>& controller)
+{
+	std::weak_ptr<BaseStatsController> psWeakController = controller;
+	widgScheduleTask([psWeakController]() {
+		if (auto psStrongController = psWeakController.lock())
+		{
+			psStrongController->displayStatsForm();
+		}
+	});
 }
 
 void DynamicIntFancyButton::updateLayout()

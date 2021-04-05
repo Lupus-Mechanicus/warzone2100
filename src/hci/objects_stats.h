@@ -67,6 +67,7 @@ public:
 	virtual size_t statsSize() const = 0;
 	virtual std::shared_ptr<StatsForm> makeStatsForm() = 0;
 	void displayStatsForm();
+	static void scheduleDisplayStatsForm(const std::shared_ptr<BaseStatsController>& controller);
 	virtual BASE_STATS *getStatsAt(size_t) const = 0;
 };
 
@@ -153,7 +154,8 @@ protected:
 	{
 		WzString costString = WzString::fromUtf8(_("\nCost: %1"));
 		costString.replace("%1", WzString::number(getCost()));
-		WzString tipString = getStatsName(getStats());
+		auto stats = getStats();
+		WzString tipString = (stats == nullptr) ? "" : getStatsName(stats);
 		tipString.append(costString);
 		return tipString.toUtf8();
 	}

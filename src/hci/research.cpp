@@ -75,9 +75,20 @@ void ResearchController::updateResearchOptionsList()
 RESEARCH *ResearchController::getObjectStatsAt(size_t objectIndex) const
 {
 	auto facility = getObjectAt(objectIndex);
-	ASSERT_NOT_NULLPTR_OR_RETURN(nullptr, facility);
+	if (facility == nullptr)
+	{
+		return nullptr;
+	}
+	if (facility->pFunctionality == nullptr)
+	{
+		return nullptr;
+	}
 
 	RESEARCH_FACILITY *psResearchFacility = &facility->pFunctionality->researchFacility;
+	if (psResearchFacility == nullptr)
+	{
+		return nullptr;
+	}
 
 	if (psResearchFacility->psSubjectPending != nullptr && !IsResearchCompleted(&asPlayerResList[facility->player][psResearchFacility->psSubjectPending->index]))
 	{
@@ -251,7 +262,7 @@ protected:
 		controller->clearStructureSelection();
 		controller->selectObject(controller->getObjectAt(objectIndex));
 		jump();
-		controller->displayStatsForm();
+		BaseStatsController::scheduleDisplayStatsForm(controller);
 	}
 
 	void display(int xOffset, int yOffset) override
@@ -373,12 +384,18 @@ private:
 		ASSERT_NOT_NULLPTR_OR_RETURN(, facility);
 
 		auto research = StructureGetResearch(facility);
+		if (research == nullptr)
+		{
+			return;
+		}
 		if (research->psSubject == nullptr)
 		{
 			return;
 		}
 
-		auto currentPoints = asPlayerResList[selectedPlayer][research->psSubject->index].currentPoints;
+		auto& playerResList = asPlayerResList[selectedPlayer];
+		ASSERT_OR_RETURN(, research->psSubject->index < playerResList.size(), "Invalid index");
+		auto currentPoints = playerResList[research->psSubject->index].currentPoints;
 		if (currentPoints != 0)
 		{
 			int researchRate = research->timeStartHold == 0 ? getBuildingResearchPoints(facility) : 0;
@@ -408,7 +425,7 @@ private:
 		releaseResearch(facility, ModeQueue);
 		controller->clearStructureSelection();
 		controller->selectObject(facility);
-		controller->displayStatsForm();
+		BaseStatsController::scheduleDisplayStatsForm(controller);
 		controller->refresh();
 	}
 
@@ -419,7 +436,7 @@ private:
 		controller->clearStructureSelection();
 		controller->requestResearchCancellation(facility);
 		controller->setHighlightedObject(facility);
-		controller->displayStatsForm();
+		BaseStatsController::scheduleDisplayStatsForm(controller);
 		controller->refresh();
 	}
 
@@ -537,7 +554,8 @@ private:
 
 	uint32_t getCost() override
 	{
-		return getStats()->researchPower;
+		auto research = getStats();
+		return research ? research->researchPower : 0;
 	}
 
 	void clickPrimary() override
