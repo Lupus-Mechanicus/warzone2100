@@ -287,8 +287,11 @@ END_GAME_STATS_DATA	collectEndGameStatsData()
 	}
 
 	fullStats.numUnits = 0;
-	for (DROID *psDroid = apsDroidLists[selectedPlayer]; psDroid; psDroid = psDroid->psNext, fullStats.numUnits++) {}
-	for (DROID *psDroid = mission.apsDroidLists[selectedPlayer]; psDroid; psDroid = psDroid->psNext, fullStats.numUnits++) {}
+	if (selectedPlayer < MAX_PLAYERS)
+	{
+		for (DROID *psDroid = apsDroidLists[selectedPlayer]; psDroid; psDroid = psDroid->psNext, fullStats.numUnits++) {}
+		for (DROID *psDroid = mission.apsDroidLists[selectedPlayer]; psDroid; psDroid = psDroid->psNext, fullStats.numUnits++) {}
+	}
 
 	return fullStats;
 }
@@ -353,9 +356,9 @@ void scoreDataToScreen(WIDGET *psWidget, ScoreDataToScreenCache& cache)
 				                  (float)(realTime - dispST) / (float)BAR_CRAWL_TIME
 				                  : 1.f;
 
-				const float length = (float)infoBars[index].percent / 100.f * (float)infoBars[index].width * mul;
+				const int length = static_cast<int>((float)infoBars[index].percent / 100.f * (float)infoBars[index].width * mul);
 
-				if ((int)length > 4)
+				if (length > 4)
 				{
 
 					/* Black shadow */
@@ -443,7 +446,7 @@ void	fillUpStats(const END_GAME_STATS_DATA& stats)
 	/* Scale for percent */
 	for (i = 0; i < DROID_LEVELS; i++)
 	{
-		length = scaleFactor * stats.numDroidsPerLevel[i];
+		length = static_cast<UDWORD>(scaleFactor * stats.numDroidsPerLevel[i]);
 		infoBars[STAT_ROOKIE + i].percent = PERCENT(length, RANK_BAR_WIDTH);
 		infoBars[STAT_ROOKIE + i].number = stats.numDroidsPerLevel[i];
 	}
@@ -460,9 +463,9 @@ void	fillUpStats(const END_GAME_STATS_DATA& stats)
 		scaleFactor = (float)STAT_BAR_WIDTH / maxi;
 	}
 
-	length = scaleFactor * stats.missionData.unitsLost;
+	length = static_cast<UDWORD>(scaleFactor * stats.missionData.unitsLost);
 	infoBars[STAT_UNIT_LOST].percent = PERCENT(length, STAT_BAR_WIDTH);
-	length = scaleFactor * stats.missionData.unitsKilled;
+	length = static_cast<UDWORD>(scaleFactor * stats.missionData.unitsKilled);
 	infoBars[STAT_UNIT_KILLED].percent = PERCENT(length, STAT_BAR_WIDTH);
 
 	/* Now do the structure losses */
@@ -476,9 +479,9 @@ void	fillUpStats(const END_GAME_STATS_DATA& stats)
 		scaleFactor = (float)STAT_BAR_WIDTH / maxi;
 	}
 
-	length = scaleFactor * stats.missionData.strLost;
+	length = static_cast<UDWORD>(scaleFactor * stats.missionData.strLost);
 	infoBars[STAT_STR_LOST].percent = PERCENT(length, STAT_BAR_WIDTH);
-	length = scaleFactor * stats.missionData.strKilled;
+	length = static_cast<UDWORD>(scaleFactor * stats.missionData.strKilled);
 	infoBars[STAT_STR_BLOWN_UP].percent = PERCENT(length, STAT_BAR_WIDTH);
 
 	/* Finally the force information - need amount of droids as well*/
@@ -495,11 +498,11 @@ void	fillUpStats(const END_GAME_STATS_DATA& stats)
 		scaleFactor = (float)STAT_BAR_WIDTH / maxi;
 	}
 
-	length = scaleFactor * stats.missionData.unitsBuilt;
+	length = static_cast<UDWORD>(scaleFactor * stats.missionData.unitsBuilt);
 	infoBars[STAT_UNITS_BUILT].percent = PERCENT(length, STAT_BAR_WIDTH);
-	length = scaleFactor * stats.numUnits;
+	length = static_cast<UDWORD>(scaleFactor * stats.numUnits);
 	infoBars[STAT_UNITS_NOW].percent = PERCENT(length, STAT_BAR_WIDTH);
-	length = scaleFactor * stats.missionData.strBuilt;
+	length = static_cast<UDWORD>(scaleFactor * stats.missionData.strBuilt);
 	infoBars[STAT_STR_BUILT].percent = PERCENT(length, STAT_BAR_WIDTH);
 
 	/* Finally the numbers themselves */

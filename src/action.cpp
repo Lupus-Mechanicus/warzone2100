@@ -412,6 +412,7 @@ bool actionVisibleTarget(DROID *psDroid, BASE_OBJECT *psTarget, int weapon_slot)
 {
 	CHECK_DROID(psDroid);
 	ASSERT_OR_RETURN(false, psTarget != nullptr, "Target is NULL");
+	ASSERT_OR_RETURN(false, psDroid->player < MAX_PLAYERS, "psDroid->player (%" PRIu8 ") must be < MAX_PLAYERS", psDroid->player);
 	if (!psTarget->visible[psDroid->player])
 	{
 		return false;
@@ -525,6 +526,17 @@ static void actionCalcPullBackPoint(BASE_OBJECT *psObj, BASE_OBJECT *psTarget, i
 
 	// make sure coordinates stay inside of the map
 	clip_world_offmap(px, py);
+}
+
+// check whether a droid is in the neighboring tile of another droid
+bool actionReachedDroid(DROID const *psDroid, DROID const *psOther)
+{
+	ASSERT_OR_RETURN(false, psDroid != nullptr && psOther != nullptr, "Bad droids");
+	CHECK_DROID(psDroid);
+	Vector2i xy = map_coord(psDroid->pos.xy());
+	Vector2i otherxy = map_coord(psOther->pos.xy());
+	Vector2i delta = xy - otherxy;
+	return delta.x >=-1 && delta.x <=1 &&  delta.y >=-1 && delta.y <=1 ;
 }
 
 
@@ -653,6 +665,7 @@ void actionUpdateDroid(DROID *psDroid)
 	bool (*actionUpdateFunc)(DROID * psDroid) = nullptr;
 	bool nonNullWeapon[MAX_WEAPONS] = { false };
 	BASE_OBJECT *psTargets[MAX_WEAPONS] = { nullptr };
+	bool hasValidWeapon = false;
 	bool hasVisibleTarget = false;
 	bool targetVisibile[MAX_WEAPONS] = { false };
 	bool bHasTarget = false;
@@ -727,7 +740,7 @@ void actionUpdateDroid(DROID *psDroid)
 						if (secondaryGetState(psDroid, DSO_ATTACK_LEVEL) == DSS_ALEV_ALWAYS)
 						{
 							psDroid->action = DACTION_ATTACK;
-							setDroidActionTarget(psDroid, psTemp, 0);
+							setDroidActionTarget(psDroid, psTemp, i);						
 						}
 					}
 				}
@@ -741,13 +754,24 @@ void actionUpdateDroid(DROID *psDroid)
 			psDroid->action = DACTION_NONE;
 			break;
 		}
-		// move back to the repair facility if necessary
-		if (DROID_STOPPED(psDroid) &&
-		    !actionReachedBuildPos(psDroid,
-		                           order->psObj->pos.x, order->psObj->pos.y, ((STRUCTURE *)order->psObj)->rot.direction,
-		                           ((STRUCTURE *)order->psObj)->pStructureType))
+		if (order->type == DORDER_RTR && order->rtrType == RTR_TYPE_REPAIR_FACILITY)
 		{
-			moveDroidToNoFormation(psDroid, order->psObj->pos.x, order->psObj->pos.y);
+			// move back to the repair facility if necessary
+			if (DROID_STOPPED(psDroid) &&
+				!actionReachedBuildPos(psDroid,
+									order->psObj->pos.x, order->psObj->pos.y, ((STRUCTURE *)order->psObj)->rot.direction,
+									((STRUCTURE *)order->psObj)->pStructureType))
+			{
+				moveDroidToNoFormation(psDroid, order->psObj->pos.x, order->psObj->pos.y);
+			}
+		}
+		else if (order->type == DORDER_RTR && order->rtrType == RTR_TYPE_DROID && DROID_STOPPED(psDroid)) {
+			if (!actionReachedDroid(psDroid, static_cast<DROID *> (order->psObj)))
+			{
+				moveDroidToNoFormation(psDroid, order->psObj->pos.x, order->psObj->pos.y);
+			} else {
+				moveStopDroid(psDroid);
+			}
 		}
 		break;
 	case DACTION_TRANSPORTWAITTOFLYIN:
@@ -953,6 +977,10 @@ void actionUpdateDroid(DROID *psDroid)
 		break;
 	case DACTION_ATTACK:
 	case DACTION_ROTATETOATTACK:
+		if (psDroid->psActionTarget[0] == nullptr &&  psDroid->psActionTarget[1] != nullptr)
+		{
+			break;
+		}
 		ASSERT_OR_RETURN(, psDroid->psActionTarget[0] != nullptr, "target is NULL while attacking");
 
 		if (psDroid->action == DACTION_ROTATETOATTACK)
@@ -1132,9 +1160,14 @@ void actionUpdateDroid(DROID *psDroid)
 					psDroid->action = DACTION_NONE;
 				}
 			}
-			else
+			else if (secondaryGetState(psDroid, DSO_HALTTYPE) != DSS_HALT_HOLD)
 			{
 				psDroid->action = DACTION_MOVETOATTACK;	// out of range - chase it
+			}
+			else
+			{
+				psDroid->order.psObj = nullptr;
+				psDroid->action = DACTION_NONE;
 			}
 		}
 
@@ -1143,17 +1176,18 @@ void actionUpdateDroid(DROID *psDroid)
 	case DACTION_VTOLATTACK:
 		{
 			WEAPON_STATS *psWeapStats = nullptr;
-
+			const bool targetIsValid = validTarget(psDroid, psDroid->psActionTarget[0], 0);
 			//uses vtResult
 			if (psDroid->psActionTarget[0] != nullptr &&
-			    validTarget(psDroid, psDroid->psActionTarget[0], 0))
+			    targetIsValid)
 			{
 				//check if vtol that its armed
 				if ((vtolEmpty(psDroid)) ||
 				    (psDroid->psActionTarget[0] == nullptr) ||
 				    //check the target hasn't become one the same player ID - Electronic Warfare
 				    (electronicDroid(psDroid) && (psDroid->player == psDroid->psActionTarget[0]->player)) ||
-				    !validTarget(psDroid, psDroid->psActionTarget[0], 0))
+					// Huh? !targetIsValid can't be true, we just checked for it
+				    !targetIsValid)
 				{
 					moveToRearm(psDroid);
 					break;
@@ -1198,7 +1232,8 @@ void actionUpdateDroid(DROID *psDroid)
 			{
 				actionAddVtolAttackRun(psDroid);
 			}
-			else
+			else if(psDroid->psActionTarget[0] != nullptr &&
+			    targetIsValid)
 			{
 				// if the vtol is close to the target, go around again
 				Vector2i diff = (psDroid->pos - psDroid->psActionTarget[0]->pos).xy();
@@ -1239,10 +1274,12 @@ void actionUpdateDroid(DROID *psDroid)
 		}
 
 		ASSERT_OR_RETURN(, psDroid->psActionTarget[0] != nullptr, "action update move to attack target is NULL");
-
+		for (unsigned i = 0; i < psDroid->numWeaps; ++i)
+		{
+			hasValidWeapon |= validTarget(psDroid, psDroid->psActionTarget[0], i);
+		}
 		//check the target hasn't become one the same player ID - Electronic Warfare, and that the target is still valid.
-		if ((electronicDroid(psDroid) && psDroid->player == psDroid->psActionTarget[0]->player) ||
-		    !validTarget(psDroid, psDroid->psActionTarget[0], 0))
+		if ((electronicDroid(psDroid) && psDroid->player == psDroid->psActionTarget[0]->player) || !hasValidWeapon)
 		{
 			for (unsigned i = 0; i < psDroid->numWeaps; ++i)
 			{
@@ -1559,7 +1596,19 @@ void actionUpdateDroid(DROID *psDroid)
 							// building a gun tower over a wall - OK
 							if (droidStartBuild(psDroid))
 							{
-								objTrace(psDroid->id, "DACTION_MOVETOBUILD: start building");
+								objTrace(psDroid->id, "DACTION_MOVETOBUILD: start building defense");
+								psDroid->action = DACTION_BUILD;
+							}
+						}
+						else if ((psStruct->pStructureType->type == REF_FACTORY && order->psStats->type == REF_FACTORY_MODULE) ||
+								(psStruct->pStructureType->type == REF_RESEARCH && order->psStats->type == REF_RESEARCH_MODULE) ||
+								(psStruct->pStructureType->type == REF_POWER_GEN && order->psStats->type == REF_POWER_MODULE) || 
+								(psStruct->pStructureType->type == REF_VTOL_FACTORY && order->psStats->type == REF_FACTORY_MODULE))
+							{
+							// upgrade current structure in a row
+							if (droidStartBuild(psDroid))
+							{
+								objTrace(psDroid->id, "DACTION_MOVETOBUILD: start building module");
 								psDroid->action = DACTION_BUILD;
 							}
 						}
@@ -1571,6 +1620,19 @@ void actionUpdateDroid(DROID *psDroid)
 #if defined(WZ_CC_GNU) && !defined(WZ_CC_INTEL) && !defined(WZ_CC_CLANG) && (7 <= __GNUC__)
 # pragma GCC diagnostic pop
 #endif
+					}
+					else if (TileHasFeature(psTile))
+					{
+						FEATURE *feature = getTileFeature(map_coord(psDroid->actionPos.x), map_coord(psDroid->actionPos.y));
+						objTrace(psDroid->id, "DACTION_MOVETOBUILD: tile has feature %d", feature->psStats->subType);
+						if (feature->psStats->subType == FEAT_OIL_RESOURCE && order->psStats->type == REF_RESOURCE_EXTRACTOR)
+						{
+							if (droidStartBuild(psDroid))
+							{
+								objTrace(psDroid->id, "DACTION_MOVETOBUILD: start building oil derrick");
+								psDroid->action = DACTION_BUILD;
+							}
+						}
 					}
 					else
 					{
@@ -1776,17 +1838,47 @@ void actionUpdateDroid(DROID *psDroid)
 		}
 		break;
 	case DACTION_MOVETOREPAIRPOINT:
-		/* moving from front to rear of repair facility or rearm pad */
-		if (actionReachedBuildPos(psDroid, psDroid->psActionTarget[0]->pos.x, psDroid->psActionTarget[0]->pos.y, ((STRUCTURE *)psDroid->psActionTarget[0])->rot.direction, ((STRUCTURE *)psDroid->psActionTarget[0])->pStructureType))
+		if (psDroid->order.rtrType == RTR_TYPE_REPAIR_FACILITY)
 		{
-			objTrace(psDroid->id, "Arrived at repair point - waiting for our turn");
-			moveStopDroid(psDroid);
-			psDroid->action = DACTION_WAITDURINGREPAIR;
-		}
-		else if (DROID_STOPPED(psDroid))
+			/* moving from front to rear of repair facility or rearm pad */
+			if (actionReachedBuildPos(psDroid, psDroid->psActionTarget[0]->pos.x, psDroid->psActionTarget[0]->pos.y, ((STRUCTURE *)psDroid->psActionTarget[0])->rot.direction, ((STRUCTURE *)psDroid->psActionTarget[0])->pStructureType))
+			{
+				objTrace(psDroid->id, "Arrived at repair point - waiting for our turn");
+				moveStopDroid(psDroid);
+				psDroid->action = DACTION_WAITDURINGREPAIR;
+			}
+			else if (DROID_STOPPED(psDroid))
+			{
+				moveDroidToNoFormation(psDroid, psDroid->psActionTarget[0]->pos.x,
+									psDroid->psActionTarget[0]->pos.y);
+			}
+		} else if (psDroid->order.rtrType == RTR_TYPE_DROID)
 		{
-			moveDroidToNoFormation(psDroid, psDroid->psActionTarget[0]->pos.x,
-			                       psDroid->psActionTarget[0]->pos.y);
+			bool reached = actionReachedDroid(psDroid, (DROID*) psDroid->order.psObj);
+			if (reached)
+			{
+				if (psDroid->body >= psDroid->originalBody)
+				{
+					objTrace(psDroid->id, "Repair not needed of droid %d", (int)psDroid->id);
+					/* set droid points to max */
+					psDroid->body = psDroid->originalBody;
+					// if completely repaired then reset order
+					secondarySetState(psDroid, DSO_RETURN_TO_LOC, DSS_NONE);
+					orderDroidObj(psDroid, DORDER_GUARD, psDroid->order.psObj, ModeImmediate);
+				}
+				else 
+				{
+					objTrace(psDroid->id, "Stopping and waiting for repairs %d", (int)psDroid->id);
+					moveStopDroid(psDroid);
+					psDroid->action = DACTION_WAITDURINGREPAIR;
+				}
+
+			}
+			else if (DROID_STOPPED(psDroid))
+			{
+				//objTrace(psDroid->id, "Droid was stopped, but havent reach the target, moving now");
+				//moveDroidToNoFormation(psDroid, psDroid->order.psObj->pos.x, psDroid->order.psObj->pos.y);
+			}
 		}
 		break;
 	case DACTION_OBSERVE:
@@ -2110,7 +2202,11 @@ static void actionDroidBase(DROID *psDroid, DROID_ACTION_DATA *psAction)
 	objTrace(psDroid->id, "base set action to %s (was %s)", getDroidActionName(psAction->action), getDroidActionName(psDroid->action));
 
 	DROID_ORDER_DATA *order = &psDroid->order;
-
+	bool hasValidWeapon = false;
+	for (int i = 0; i < MAX_WEAPONS; i++)
+	{
+		hasValidWeapon |= validTarget(psDroid, psAction->psObj, i);
+	}
 	switch (psAction->action)
 	{
 	case DACTION_NONE:
@@ -2145,7 +2241,12 @@ static void actionDroidBase(DROID *psDroid, DROID_ACTION_DATA *psAction)
 		{
 			break;
 		}
-
+		if (!hasValidWeapon)
+		{
+			// continuing is pointless, we were given an invalid target
+			// for ex. AA gun can't attack ground unit
+			break;
+		}
 		if (electronicDroid(psDroid))
 		{
 			//check for low or zero resistance - just zero resistance!
@@ -2197,11 +2298,10 @@ static void actionDroidBase(DROID *psDroid, DROID_ACTION_DATA *psAction)
 					moveTurnDroid(psDroid, psDroid->psActionTarget[0]->pos.x, psDroid->psActionTarget[0]->pos.y);
 				}
 			}
-			else if (order->type != DORDER_HOLD)
+			else if (order->type != DORDER_HOLD && secondaryGetState(psDroid, DSO_HALTTYPE) != DSS_HALT_HOLD)
 			{
 				int pbx = 0;
 				int pby = 0;
-
 				/* direct fire - try and extend the range */
 				psDroid->action = DACTION_MOVETOATTACK;
 				actionCalcPullBackPoint(psDroid, psAction->psObj, &pbx, &pby);
@@ -2211,12 +2311,16 @@ static void actionDroidBase(DROID *psDroid, DROID_ACTION_DATA *psAction)
 				turnOffMultiMsg(false);
 			}
 		}
-		else if (order->type != DORDER_HOLD) // approach closer?
+		else if (order->type != DORDER_HOLD && secondaryGetState(psDroid, DSO_HALTTYPE) != DSS_HALT_HOLD) // approach closer?
 		{
 			psDroid->action = DACTION_MOVETOATTACK;
 			turnOffMultiMsg(true);
 			moveDroidTo(psDroid, psAction->psObj->pos.x, psAction->psObj->pos.y);
 			turnOffMultiMsg(false);
+		}
+		else if (order->type != DORDER_HOLD && secondaryGetState(psDroid, DSO_HALTTYPE) == DSS_HALT_HOLD)
+		{
+			psDroid->action = DACTION_ATTACK;
 		}
 		break;
 

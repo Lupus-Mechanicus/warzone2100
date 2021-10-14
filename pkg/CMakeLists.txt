@@ -2,7 +2,7 @@
 # Generator-specific components
 
 install(FILES
-  "${CMAKE_CURRENT_SOURCE_DIR}/debian/copyright"
+  "${CMAKE_CURRENT_SOURCE_DIR}/copyright"
   DESTINATION "${CMAKE_INSTALL_DOCDIR}${WZ_OUTPUT_NAME_SUFFIX}"
   COMPONENT DebianInfo
 )
@@ -86,6 +86,9 @@ set(CPACK_COMPONENTS_ALL Core Data Docs Info Languages Fonts)
 if(UNIX AND NOT APPLE)
 	list(APPEND CPACK_COMPONENTS_ALL Manpages)
 endif()
+if(WZ_WIN_HAS_PDB)
+	list(APPEND CPACK_COMPONENTS_ALL DebugSymbols)
+endif()
 set(CPACK_COMPONENTS_GROUPING ALL_COMPONENTS_IN_ONE)
 
 #########################
@@ -96,6 +99,15 @@ set(CPACK_COMPONENT_CORE_REQUIRED ON)
 set(CPACK_COMPONENT_CORE_DESCRIPTION "Application")
 set(CPACK_COMPONENT_CORE_GROUP "CoreGroup")
 set(CPACK_COMPONENT_CORE_DEPENDS Data Docs Info)
+if(WZ_WIN_HAS_PDB)
+	list(APPEND CPACK_COMPONENT_CORE_DEPENDS DebugSymbols)
+endif()
+
+set(CPACK_COMPONENT_DEBUGSYMBOLS_DISPLAY_NAME "Debug Symbols")
+set(CPACK_COMPONENT_DEBUGSYMBOLS_REQUIRED ON)
+set(CPACK_COMPONENT_DEBUGSYMBOLS_DESCRIPTION "Debug Symbols")
+set(CPACK_COMPONENT_DEBUGSYMBOLS_GROUP "CoreGroup")
+set(CPACK_COMPONENT_DEBUGSYMBOLS_HIDDEN ON)
 
 set(CPACK_COMPONENT_DATA_DISPLAY_NAME "Data Files")
 set(CPACK_COMPONENT_DATA_REQUIRED ON)
@@ -116,6 +128,11 @@ set(CPACK_COMPONENT_FONTS_DISPLAY_NAME "Fonts")
 set(CPACK_COMPONENT_FONTS_REQUIRED ON)
 set(CPACK_COMPONENT_FONTS_DESCRIPTION "Fonts")
 set(CPACK_COMPONENT_FONTS_GROUP "CoreGroup")
+
+set(CPACK_COMPONENT_PORTABLECONFIG_DISPLAY_NAME "Portable Configuration")
+set(CPACK_COMPONENT_PORTABLECONFIG_DESCRIPTION "Portable Configuration")
+set(CPACK_COMPONENT_PORTABLECONFIG_GROUP "CoreGroup")
+set(CPACK_COMPONENT_PORTABLECONFIG_HIDDEN ON)
 
 set(CPACK_COMPONENT_MANPAGES_GROUP "CoreGroup")
 
@@ -155,19 +172,12 @@ if(CMAKE_SYSTEM_NAME MATCHES "Windows")
 	endif()
 
 	set(PACKAGE "${_warzone_target_output_name}")
-	if(WZ_PORTABLE)
-		set(PACKAGE_NAME "Warzone 2100 Portable")
 
-		# For the portable build, install `launch_warzone.bat` in the base folder
-		install(FILES
-			"${CMAKE_CURRENT_SOURCE_DIR}/nsis/launch_warzone.bat"
-			COMPONENT Core DESTINATION "."
-		)
-	else()
-		set(PACKAGE_NAME "Warzone 2100")
-	endif()
-	set(CPACK_NSIS_DISPLAY_NAME PACKAGE_NAME)
-	set(CPACK_NSIS_PACKAGE_NAME PACKAGE_NAME)
+	# For the portable build, install `launch_warzone.bat` in the base folder
+	install(FILES
+		"${CMAKE_CURRENT_SOURCE_DIR}/nsis/launch_warzone.bat"
+		COMPONENT PortableConfig DESTINATION "."
+	)
 
 	set(SOURCE_DIR "${CMAKE_SOURCE_DIR}")
 	set(BUILD_DIR "${CMAKE_BINARY_DIR}")
@@ -189,7 +199,7 @@ if(CMAKE_SYSTEM_NAME MATCHES "Windows")
 	set(CPACK_COMPONENT_LANGUAGES_DISPLAY_NAME "$(TEXT_SecNLS)")
 	set(CPACK_COMPONENT_LANGUAGES_DESCRIPTION "$(DESC_SecNLS)")
 
-	if(MSVC)
+	if(MSVC OR MINGW) # MINGW may link with the Universal C Runtime, and the VC runtime installer can be used to ensure that system component is installed
 		set(NSIS_MSVCRUNTIME "on")
 		# Determine the latest available version of the MSVC runtime
 		# Fetch https://aka.ms/vs/16/release/vc_redist.x64.exe
@@ -229,6 +239,30 @@ if(CMAKE_SYSTEM_NAME MATCHES "Windows")
 			message(STATUS "NSIS_APPLOCALCONFIG_SHA512_X86: \"${NSIS_APPLOCALCONFIG_SHA512_X86}\"")
 			message(STATUS "NSIS_APPLOCALCONFIG_SHA512_X64: \"${NSIS_APPLOCALCONFIG_SHA512_X64}\"")
 			message(STATUS "NSIS_APPLOCALCONFIG_SHA512_ARM64: \"${NSIS_APPLOCALCONFIG_SHA512_ARM64}\"")
+
+			if(MSVC)
+				set(WZ_VS_PLATFORM_NAME "${CMAKE_VS_PLATFORM_NAME}")
+			elseif(MINGW)
+				# Map target arch to WZ_VS_PLATFORM_NAME
+				include(TargetArch)
+				target_architecture(_mingw_target_arch)
+				if(_mingw_target_arch MATCHES "^arm")
+					if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+						set(WZ_VS_PLATFORM_NAME "arm64")
+					elseif(CMAKE_SIZEOF_VOID_P EQUAL 4)
+						set(WZ_VS_PLATFORM_NAME "arm")
+					else()
+						message(FATAL_ERROR "Unsupported CMAKE_SIZEOF_VOID_P: ${CMAKE_SIZEOF_VOID_P}")
+					endif()
+				elseif(_mingw_target_arch STREQUAL "x86_64")
+					set(WZ_VS_PLATFORM_NAME "x64")
+				elseif(_mingw_target_arch STREQUAL "i386")
+					set(WZ_VS_PLATFORM_NAME "Win32")
+				else()
+					message(FATAL_ERROR "Unsupported MINGW target arch: \"${_mingw_target_arch}\"")
+				endif()
+				message(STATUS "WZ_VS_PLATFORM_NAME: ${WZ_VS_PLATFORM_NAME}")
+			endif()
 		else()
 			message(FATAL_ERROR "Failed to fetch: ${_applocalconfig_buildinfo_dl_url}; error: \"${_dl_status_string}\"")
 		endif()
@@ -272,6 +306,13 @@ elseif(CMAKE_SYSTEM_NAME MATCHES "Darwin")
 	set(CPACK_DMG_VOLUME_NAME "Warzone 2100")
 
 endif()
+
+#####################
+# Archive settings
+
+# Always use component install for archives
+# See: https://stackoverflow.com/a/55601955
+set(CPACK_ARCHIVE_COMPONENT_INSTALL ON)
 
 #####################
 # RPM Settings

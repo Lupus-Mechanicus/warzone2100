@@ -27,7 +27,6 @@
 
 #include "droid.h"						// for droid sending and ordering.
 #include "droiddef.h"
-#include "keymap.h"
 #include "stats.h"
 #include "move.h"						// for ordering droids
 #include "objmem.h"
@@ -414,7 +413,8 @@ bool recvDroid(NETQUEUE queue)
 	}
 	NETend();
 
-	if (!getDebugMappingStatus() && bMultiPlayer)
+	const DebugInputManager& dbgInputManager = gInputManager.debugManager();
+	if (!dbgInputManager.debugMappingsAllowed() && bMultiPlayer)
 	{
 		debug(LOG_WARNING, "Failed to add droid for player %u.", NetPlay.players[queue.index].position);
 		return false;
@@ -560,6 +560,10 @@ DROID_ORDER_DATA infoToOrderData(QueuedDroidInfo const &info, STRUCTURE_STATS co
 void sendDroidInfo(DROID *psDroid, DroidOrder const &order, bool add)
 {
 	if (!myResponsibility(psDroid->player))
+	{
+		return;
+	}
+	if (NETisReplay())
 	{
 		return;
 	}
@@ -805,7 +809,8 @@ bool recvDestroyDroid(NETQUEUE queue)
 	}
 	NETend();
 
-	if (!getDebugMappingStatus() && bMultiPlayer)
+	const DebugInputManager& dbgInputManager = gInputManager.debugManager();
+	if (!dbgInputManager.debugMappingsAllowed() && bMultiPlayer)
 	{
 		debug(LOG_WARNING, "Failed to remove droid for player %u.", NetPlay.players[queue.index].position);
 		return false;

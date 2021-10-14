@@ -51,8 +51,9 @@ public:
 	int width();
 	// Height (in points)
 	int height();
-	void render(Vector2i position, PIELIGHT colour, float rotation = 0.0f, int maxWidth = -1, int maxHeight = -1);
-	void render(int x, int y, PIELIGHT colour, float rotation = 0.0f, int maxWidth = -1, int maxHeight = -1) { render(Vector2i{x,y}, colour, rotation, maxWidth, maxHeight); }
+	void render(Vector2f position, PIELIGHT colour, float rotation = 0.0f, int maxWidth = -1, int maxHeight = -1);
+	void render(float x, float y, PIELIGHT colour, float rotation = 0.0f, int maxWidth = -1, int maxHeight = -1) { render(Vector2f{x,y}, colour, rotation, maxWidth, maxHeight); }
+	void renderOutlined(int x, int y, PIELIGHT colour, PIELIGHT outlineColour);
 	int aboveBase(); // (in points)
 	int belowBase(); // (in points)
 	int lineSize(); // (in points)
@@ -128,7 +129,7 @@ void iV_TextShutdown();
 void iV_font(const char *fontName, const char *fontFace, const char *fontFaceBold);
 
 int iV_GetEllipsisWidth(iV_fonts fontID);
-void iV_DrawEllipsis(iV_fonts fontID, Vector2i position, PIELIGHT colour);
+void iV_DrawEllipsis(iV_fonts fontID, Vector2f position, PIELIGHT colour);
 
 int iV_GetTextAboveBase(iV_fonts fontID);
 int iV_GetTextBelowBase(iV_fonts fontID);
@@ -140,7 +141,7 @@ unsigned int iV_GetCharWidth(uint32_t charCode, iV_fonts fontID);
 unsigned int iV_GetTextHeight(const char *string, iV_fonts fontID);
 void iV_SetTextColour(PIELIGHT colour);
 
-/// Valid values for "Justify" argument of iV_DrawFormattedText().
+/// Valid values for "Justify" argument of iV_FormatText().
 enum
 {
 	FTEXT_LEFTJUSTIFY,			// Left justify.
@@ -155,7 +156,6 @@ struct TextLine
 	Vector2i offset;
 };
 std::vector<TextLine> iV_FormatText(const char *String, UDWORD MaxWidth, UDWORD Justify, iV_fonts fontID, bool ignoreNewlines = false);
-int iV_DrawFormattedText(const char *String, UDWORD x, UDWORD y, UDWORD Width, UDWORD Justify, iV_fonts fontID);
 void iV_DrawTextRotated(const char *string, float x, float y, float rotation, iV_fonts fontID);
 
 /// Draws text with a printf syntax to the screen.

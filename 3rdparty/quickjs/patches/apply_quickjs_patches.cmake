@@ -60,6 +60,12 @@ quickjs_apply_patches(
 		"006-msvc-64bit-compatibility.patch"
 		"007-freeruntime2.patch"
 		"008-msvc-arm64-compat.patch"
+		"009-bswap-netbsd-compat.patch"
 )
+
+# Finally, rename VERSION to VERSION.txt
+if(EXISTS "${_directoryOfThisScript}/../VERSION")
+	file(RENAME "${_directoryOfThisScript}/../VERSION" "${_directoryOfThisScript}/../VERSION.txt")
+endif()
 
 message(STATUS "Finished applying patches.")

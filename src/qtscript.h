@@ -135,6 +135,7 @@ bool triggerEventStructDemolish(STRUCTURE *psStruct, DROID *psDroid);
 bool triggerEventDroidIdle(DROID *psDroid);
 bool triggerEventDestroyed(BASE_OBJECT *psVictim);
 bool triggerEventStructureReady(STRUCTURE *psStruct);
+bool triggerEventStructureUpgradeStarted(STRUCTURE *psStruct);
 bool triggerEventSeen(BASE_OBJECT *psViewer, BASE_OBJECT *psSeen);
 bool triggerEventObjectTransfer(BASE_OBJECT *psObj, int from);
 bool triggerEventChat(int from, int to, const char *message);
@@ -160,53 +161,12 @@ bool triggerEventAllianceBroken(uint8_t from, uint8_t to);
 void jsDebugSelected(const BASE_OBJECT *psObj);
 void jsDebugMessageUpdate();
 
-struct ScriptMapData
-{
-	struct Structure
-	{
-		WzString name;
-		Vector2i position;
-		uint16_t direction;
-		uint8_t modules;
-		int8_t player;  // -1 = scavs
-	};
-	struct Droid
-	{
-		WzString name;
-		Vector2i position;
-		uint16_t direction;
-		int8_t player;  // -1 = scavs
-	};
-	struct Feature
-	{
-		WzString name;
-		Vector2i position;
-		uint16_t direction;
-	};
-
-	uint32_t crcSumStructures(uint32_t crc) const;
-	uint32_t crcSumDroids(uint32_t crc) const;
-	uint32_t crcSumFeatures(uint32_t crc) const;
-
-	bool valid = false;
-	int mapWidth;
-	int mapHeight;
-	//int maxPlayers;
-	std::vector<uint16_t> texture;
-	std::vector<int16_t> height;
-	std::vector<Structure> structures;
-	std::vector<Droid> droids;
-	std::vector<Feature> features;
-
-	MersenneTwister mt;
-};
-
-ScriptMapData runMapScript(WzString const &path, uint64_t seed, bool preview);
 //
 
 struct LABEL
 {
-	Vector2i p1, p2;	// world coordinates
+	Vector2i p1 = Vector2i(0, 0);	// world coordinates
+	Vector2i p2 = Vector2i(0, 0);	// world coordinates
 	int id;
 	int type;
 	int player;
@@ -341,7 +301,6 @@ public:
 	bool updateScripts();
 	bool shutdownScripts();
 
-	ScriptMapData runMapScript(WzString const &path, uint64_t seed, bool preview);
 	wzapi::scripting_instance* loadPlayerScript(const WzString& path, int player, AIDifficulty difficulty);
 
 	// Set/write variables in the script's global context, run after loading script,
@@ -391,7 +350,7 @@ public:
 		}
 		return removedTimerIDs;
 	}
-	
+
 	bool removeTimer(uniqueTimerID timerID);
 public:
 	// Monitoring performance of function calls
@@ -422,7 +381,7 @@ public:
 	nlohmann::json constructStartPositions();
 public:
 	// Label functions
-	static wzapi::no_return_value resetLabel(WZAPI_PARAMS(std::string label, optional<int> filter));
+	static wzapi::no_return_value resetLabel(WZAPI_PARAMS(std::string label, optional<int> playerFilter));
 	static std::vector<std::string> enumLabels(WZAPI_PARAMS(optional<int> filterLabelType));
 
 	static wzapi::no_return_value addLabel(WZAPI_PARAMS(generic_script_object object, std::string label, optional<int> _triggered));
@@ -540,7 +499,7 @@ protected:
 	std::unordered_map<wzapi::scripting_instance *, nlohmann::json> debug_GetGlobalsSnapshot() const;
 	std::vector<scripting_engine::timerNodeSnapshot> debug_GetTimersSnapshot() const;
 	std::vector<scripting_engine::LabelInfo> debug_GetLabelInfo() const;
-	
+
 	/// Show all labels or all currently active labels
 	void markAllLabels(bool only_active);
 	/// Mark and show label

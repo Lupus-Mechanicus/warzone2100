@@ -106,6 +106,7 @@ void SetFormAudioIDs(int OpenID, int CloseID)
 
 static void setBarGraphValue(W_BARGRAPH *barGraph, PIELIGHT colour, int value, int range)
 {
+	ASSERT_OR_RETURN(, range != 0, "range is 0");
 	barGraph->majorCol = colour;
 	barGraph->majorSize = PERNUM(WBAR_SCALE, clip(value, 0, range), range);
 	barGraph->show();
@@ -183,8 +184,8 @@ void intDisplayPowerBar(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
 	lastRealTime = realTime;
 
 	ManPow = ManuPower / POWERBAR_SCALE;
-	Avail = (displayPower + 1e-8) / POWERBAR_SCALE;
-	realPower = (displayPower + 1e-8) - ManuPower;
+	Avail = static_cast<SDWORD>((displayPower + 1e-8) / POWERBAR_SCALE);
+	realPower = static_cast<SDWORD>((displayPower + 1e-8) - ManuPower);
 	ManuPower = 0;
 
 	BarWidth = BarGraph->width();
@@ -1097,11 +1098,11 @@ void IntFancyButton::displayIMD(Image image, ImdObject imdObject, int xOffset, i
 			BASE_STATS *psStats = (BASE_STATS *)Object;
 			if (psStats->id.compare("SuperTransportBody") == 0)
 			{
-				model.scale *= .4;
+				model.scale = static_cast<int>(model.scale * .4f);
 			}
 			else if (psStats->id.compare("TransporterBody") == 0)
 			{
-				model.scale *= .6;
+				model.scale = static_cast<int>(model.scale * .6f);
 			}
 		}
 		else if (IMDType == IMDTYPE_RESEARCH)
@@ -1203,7 +1204,7 @@ void IntFancyButton::displayIMD(Image image, ImdObject imdObject, int xOffset, i
 
 		if (!image.isNull())
 		{
-			iV_DrawImage(image, ButXPos + ox, ButYPos + oy);
+			iV_DrawImageImage(image, ButXPos + ox, ButYPos + oy);
 		}
 
 		/* all non droid buttons */
@@ -1244,7 +1245,7 @@ void IntFancyButton::displayImage(Image image, int xOffset, int yOffset)
 	}
 
 	displayClear(xOffset, yOffset);
-	iV_DrawImage(image, xOffset + x(), yOffset + y());
+	iV_DrawImageImage(image, xOffset + x(), yOffset + y());
 }
 
 // Create a blank button.
@@ -1604,83 +1605,6 @@ static void StatGetResearchImage(BASE_STATS *psStat, Image *image, iIMDShape **S
 	}
 }
 
-static void intDisplayBar(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset, bool isPowerBar, DisplayBarCache& cache)
-{
-	W_BARGRAPH *BarGraph = (W_BARGRAPH *)psWidget;
-	char szVal[30];
-	char const *szCheckWidth = "00000";
-	int x0 = xOffset + BarGraph->x();
-	int y0 = yOffset + BarGraph->y();
-	int arbitraryOffset = 3;
-	int iX, iY;
-	int barWidth = 100, width;
-	int i, precisionFactor = 1, value;
-
-	cache.wzCheckWidthText.setText(szCheckWidth, font_regular);
-
-	if (isPowerBar)
-	{
-		//draw the background image
-		iV_DrawImage(IntImages, IMAGE_DES_POWERBAR_LEFT, x0, y0);
-		iV_DrawImage(IntImages, IMAGE_DES_POWERBAR_RIGHT, x0 + psWidget->width() - iV_GetImageWidth(IntImages, IMAGE_DES_POWERBAR_RIGHT), y0);
-	}
-
-	// Arbitrary increment for the position of the bars
-	x0 += arbitraryOffset;
-	y0 += arbitraryOffset;
-
-	/* indent to allow text value */
-	iX = x0 + cache.wzCheckWidthText.width();
-	iY = y0 + (iV_GetImageHeight(IntImages, IMAGE_DES_STATSCURR) - iV_GetTextLineSize(font_regular)) / 2 - iV_GetTextAboveBase(font_regular);
-
-	if (isPowerBar)
-	{
-		// Adjust the width based on the text drawn
-		barWidth = BarGraph->width() - (iX - x0 + arbitraryOffset);
-	}
-
-	//draw current value section
-	width = MIN(BarGraph->majorSize * barWidth / 100, barWidth);
-	iV_DrawImageRepeatX(IntImages, IMAGE_DES_STATSCURR, iX, y0, width, defaultProjectionMatrix(), true);
-
-	/* draw text value */
-	for (i = 0; i < BarGraph->precision; ++i)
-	{
-		precisionFactor *= 10;
-	}
-	value = (BarGraph->iOriginal * precisionFactor + BarGraph->denominator / 2) / BarGraph->denominator;
-	sprintf(szVal, "%d%s%.*d", value / precisionFactor, precisionFactor == 1 ? "" : ".", BarGraph->precision, value % precisionFactor);
-	cache.wzText.setText(szVal, font_regular);
-	cache.wzText.render(x0, iY, WZCOL_TEXT_BRIGHT);
-
-	//draw the comparison value - only if not zero
-	if (BarGraph->minorSize != 0)
-	{
-		width = MIN(BarGraph->minorSize * barWidth / 100, barWidth);
-		iV_DrawImage(IntImages, IMAGE_DES_STATSCOMP, iX + width, y0 - 1);
-	}
-}
-
-/* Draws a stats bar for the design screen */
-void intDisplayStatsBar(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
-{
-	// Any widget using intDisplayStatsBar must have its pUserData initialized to a (DisplayBarCache*)
-	assert(psWidget->pUserData != nullptr);
-	DisplayBarCache& cache = *static_cast<DisplayBarCache*>(psWidget->pUserData);
-
-	intDisplayBar(psWidget, xOffset, yOffset, false, cache);
-}
-
-/* Draws a Template Power Bar for the Design Screen */
-void intDisplayDesignPowerBar(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
-{
-	// Any widget using intDisplayDesignPowerBar must have its pUserData initialized to a (DisplayBarCache*)
-	assert(psWidget->pUserData != nullptr);
-	DisplayBarCache& cache = *static_cast<DisplayBarCache*>(psWidget->pUserData);
-
-	intDisplayBar(psWidget, xOffset, yOffset, true, cache);
-}
-
 // Widget callback function to play an audio track.
 //
 #define WIDGETBEEPGAP (200)	// 200 milliseconds between each beep please
@@ -1782,7 +1706,7 @@ void drawRadarBlips(int radarX, int radarY, float pixSizeH, float pixSizeV, cons
 	}
 
 	/* Go through all the proximity Displays */
-	for (psProxDisp = apsProxDisp[selectedPlayer]; psProxDisp != nullptr; psProxDisp = psProxDisp->psNext)
+	for (psProxDisp = (selectedPlayer < MAX_PLAYERS) ? apsProxDisp[selectedPlayer] : nullptr; psProxDisp != nullptr; psProxDisp = psProxDisp->psNext)
 	{
 		unsigned        animationLength = ARRAY_SIZE(imagesEnemy) - 1;  // Same size as imagesResource and imagesArtifact.
 		const uint16_t *images;
@@ -1838,13 +1762,13 @@ void drawRadarBlips(int radarX, int radarY, float pixSizeH, float pixSizeV, cons
 		{
 			const VIEW_PROXIMITY *psViewProx = (VIEW_PROXIMITY *)psProxDisp->psMessage->pViewData->pData;
 
-			x = (psViewProx->x / TILE_UNITS - scrollMinX) * pixSizeH;
-			y = (psViewProx->y / TILE_UNITS - scrollMinY) * pixSizeV;
+			x = static_cast<int>((psViewProx->x / TILE_UNITS - scrollMinX) * pixSizeH);
+			y = static_cast<int>((psViewProx->y / TILE_UNITS - scrollMinY) * pixSizeV);
 		}
 		else if (psProxDisp->type == POS_PROXOBJ)
 		{
-			x = (psProxDisp->psMessage->psObj->pos.x / TILE_UNITS - scrollMinX) * pixSizeH;
-			y = (psProxDisp->psMessage->psObj->pos.y / TILE_UNITS - scrollMinY) * pixSizeV;
+			x = static_cast<int>((psProxDisp->psMessage->psObj->pos.x / TILE_UNITS - scrollMinX) * pixSizeH);
+			y = static_cast<int>((psProxDisp->psMessage->psObj->pos.y / TILE_UNITS - scrollMinY) * pixSizeV);
 		}
 		else
 		{
@@ -1866,8 +1790,8 @@ void drawRadarBlips(int radarX, int radarY, float pixSizeH, float pixSizeV, cons
 	{
 		unsigned        animationLength = ARRAY_SIZE(imagesEnemy) - 1;
 		int             strobe = (realTime / delay) % animationLength;
-		x = (x / TILE_UNITS - scrollMinX) * pixSizeH;
-		y = (y / TILE_UNITS - scrollMinY) * pixSizeV;
+		x = static_cast<int>((x / TILE_UNITS - scrollMinX) * pixSizeH);
+		y = static_cast<int>((y / TILE_UNITS - scrollMinY) * pixSizeV);
 		imageID = imagesEnemy[strobe];
 
 		// NOTE:  On certain missions (limbo & expand), there is still valid data that is stored outside the

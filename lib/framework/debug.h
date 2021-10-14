@@ -42,6 +42,10 @@
 #include "macros.h"
 #include "types.h"
 
+#if defined(WZ_CC_MINGW)
+#include <cstdio>		// For __MINGW_PRINTF_FORMAT define
+#endif
+
 /****************************************************************************************
  *
  * Basic debugging macro's
@@ -191,6 +195,8 @@ enum code_part
 	LOG_POPUP,	// special, on by default, for both debug & release builds (used for OS dependent popup code)
 	LOG_CONSOLE,	// send console messages to file
 	LOG_ACTIVITY,
+	LOG_RESEARCH,
+	LOG_SAVEGAME,
 	LOG_LAST /**< _must_ be last! */
 };
 
@@ -265,7 +271,7 @@ bool debug_enable_switch(const char *str);
  * Only outputs if debugging of part was formerly enabled with debug_enable_switch.
  */
 #define debug(part, ...) do { if (enabled_debug[part]) _debug(__LINE__, part, __FUNCTION__, __VA_ARGS__); } while(0)
-#ifdef WZ_CC_MINGW
+#if defined(WZ_CC_MINGW)
 void _debug(int line, code_part part, const char *function, const char *str, ...) WZ_DECL_FORMAT(__MINGW_PRINTF_FORMAT, 4, 5);
 #else
 void _debug(int line, code_part part, const char *function, const char *str, ...) WZ_DECL_FORMAT(printf, 4, 5);

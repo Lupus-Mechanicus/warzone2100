@@ -9,7 +9,7 @@
     }
   },
   "env": {
-	"es6": true
+    "es6": true
   },
   "rules": {
     "no-undef": "off",
@@ -29,7 +29,10 @@
     "no-prototype-builtins": "off",
     "no-misleading-character-class": "error",
     "no-unused-vars": "off",
-    "no-cond-assign": ["error", "always"],
+    "no-cond-assign": [
+      "error",
+      "always"
+    ],
     "no-loss-of-precision": "error",
     "no-promise-executor-return": "error",
     "no-unreachable-loop": "error",
@@ -51,7 +54,6 @@
     "no-self-compare": "error",
     "no-sequences": "warn",
     "no-throw-literal": "error",
-    /*"no-unmodified-loop-condition": "error",*/
     "no-useless-call": "error",
     "no-void": "error"
   },
@@ -78,7 +80,6 @@
     "scriptPath": "readonly",
     "Stats": "readonly",
     "Upgrades": "writable",
-    // Some useful constants
     "TER_WATER": "readonly",
     "TER_CLIFFFACE": "readonly",
     "WEATHER_CLEAR": "readonly",
@@ -105,13 +106,13 @@
     "DORDER_STOP": "readonly",
     "DORDER_REARM": "readonly",
     "DORDER_RECYCLE": "readonly",
-    "COMMAND": "readonly", // deprecated
-    "BUILD": "readonly", // deprecated
-    "MANUFACTURE": "readonly", // deprecated
-    "RESEARCH": "readonly", // deprecated
-    "INTELMAP": "readonly", // deprecated
-    "DESIGN": "readonly", // deprecated
-    "CANCEL": "readonly", // deprecated
+    "COMMAND": "readonly",
+    "BUILD": "readonly",
+    "MANUFACTURE": "readonly",
+    "RESEARCH": "readonly",
+    "INTELMAP": "readonly",
+    "DESIGN": "readonly",
+    "CANCEL": "readonly",
     "CAMP_CLEAN": "readonly",
     "CAMP_BASE": "readonly",
     "CAMP_WALLS": "readonly",
@@ -169,13 +170,11 @@
     "RESEARCH_DATA": "readonly",
     "LZ_COMPROMISED_TIME": "readonly",
     "OBJECT_FLAG_UNSELECTABLE": "readonly",
-    // the constants below are subject to change without notice...
     "PROX_MSG": "readonly",
     "CAMP_MSG": "readonly",
     "MISS_MSG": "readonly",
     "RES_MSG": "readonly",
     "LDS_EXPAND_LIMBO": "readonly",
-    // end useful constants
     "groupSizes": "readonly",
     "playerData": "readonly",
     "derrickPositions": "readonly",

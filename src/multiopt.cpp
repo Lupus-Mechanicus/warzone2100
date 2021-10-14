@@ -88,7 +88,7 @@ void sendOptions()
 	NETuint32_t(&game.power);
 	NETuint8_t(&game.base);
 	NETuint8_t(&game.alliance);
-	NETbool(&game.scavengers);
+	NETuint8_t(&game.scavengers);
 	NETbool(&game.isMapMod);
 	NETuint32_t(&game.techLevel);
 
@@ -98,7 +98,7 @@ void sendOptions()
 	}
 
 	// Send the list of who is still joining
-	for (unsigned i = 0; i < MAX_PLAYERS; i++)
+	for (unsigned i = 0; i < MAX_CONNECTED_PLAYERS; i++)
 	{
 		NETbool(&ingame.JoiningInProgress[i]);
 	}
@@ -134,6 +134,8 @@ void sendOptions()
 // options for a game. (usually recvd in frontend)
 void recvOptions(NETQUEUE queue)
 {
+	ASSERT_OR_RETURN(, queue.index == NetPlay.hostPlayer, "NET_OPTIONS received from unexpected player: %" PRIu8 " - ignoring", queue.index);
+
 	unsigned int i;
 
 	// store prior map / mod info
@@ -159,7 +161,7 @@ void recvOptions(NETQUEUE queue)
 	NETuint32_t(&game.power);
 	NETuint8_t(&game.base);
 	NETuint8_t(&game.alliance);
-	NETbool(&game.scavengers);
+	NETuint8_t(&game.scavengers);
 	NETbool(&game.isMapMod);
 	NETuint32_t(&game.techLevel);
 
@@ -169,7 +171,7 @@ void recvOptions(NETQUEUE queue)
 	}
 
 	// Send the list of who is still joining
-	for (i = 0; i < MAX_PLAYERS; i++)
+	for (i = 0; i < MAX_CONNECTED_PLAYERS; i++)
 	{
 		NETbool(&ingame.JoiningInProgress[i]);
 	}
@@ -219,13 +221,17 @@ void recvOptions(NETQUEUE queue)
 		buildMapList();
 	}
 
-	bool haveData = true;
-	auto requestFile = [&haveData](Sha256 &hash, char const *filename) {
+	enum class FileRequestResult {
+		StartingDownload,
+		DownloadInProgress,
+		FileExists,
+		FailedToOpenFileForWriting
+	};
+	auto requestFile = [](Sha256 &hash, char const *filename) -> FileRequestResult {
 		if (std::any_of(NetPlay.wzFiles.begin(), NetPlay.wzFiles.end(), [&hash](WZFile const &file) { return file.hash == hash; }))
 		{
 			debug(LOG_INFO, "Already requested file, continue waiting.");
-			haveData = false;
-			return false;  // Downloading the file already
+			return FileRequestResult::DownloadInProgress;  // Downloading the file already
 		}
 
 		if (!PHYSFS_exists(filename))
@@ -238,26 +244,25 @@ void recvOptions(NETQUEUE queue)
 		}
 		else
 		{
-			pal_Init(); // Palette could be modded.
-			return false;  // Have the file already.
+			pal_Init(); // Palette could be modded. // Why is this here - isn't there a better place for it?
+			return FileRequestResult::FileExists;  // Have the file already.
 		}
 
 		PHYSFS_file *pFileHandle = PHYSFS_openWrite(filename);
 		if (pFileHandle == nullptr)
 		{
 			debug(LOG_ERROR, "Failed to open %s for writing: %s", filename, WZ_PHYSFS_getLastError());
-			return false;
+			return FileRequestResult::FailedToOpenFileForWriting;
 		}
 
 		NetPlay.wzFiles.emplace_back(pFileHandle, filename, hash);
 
 		// Request the map/mod from the host
-		NETbeginEncode(NETnetQueue(NET_HOST_ONLY), NET_FILE_REQUESTED);
+		NETbeginEncode(NETnetQueue(NetPlay.hostPlayer), NET_FILE_REQUESTED);
 		NETbin(hash.bytes, hash.Bytes);
 		NETend();
 
-		haveData = false;
-		return true;  // Starting download now.
+		return FileRequestResult::StartingDownload;  // Starting download now.
 	};
 
 	LEVEL_DATASET *mapData = levFindDataSet(game.map, &game.hash);
@@ -275,15 +280,25 @@ void recvOptions(NETQUEUE queue)
 		char filename[256];
 		ssprintf(filename, "maps/%dc-%s-%s.wz", game.maxPlayers, mapName, game.hash.toString().c_str());  // Wonder whether game.maxPlayers is initialised already?
 
-		if (requestFile(game.hash, filename))
+		auto requestResult = requestFile(game.hash, filename);
+		switch (requestResult)
 		{
-			debug(LOG_INFO, "Map was not found, requesting map %s from host, type %d", game.map, game.isMapMod);
-			addConsoleMessage("MAP REQUESTED!", DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
-		}
-		else
-		{
-			debug(LOG_FATAL, "Can't load map %s, even though we downloaded %s", game.map, filename);
-			abort();
+			case FileRequestResult::StartingDownload:
+				debug(LOG_INFO, "Map was not found, requesting map %s from host, type %d", game.map, game.isMapMod);
+				addConsoleMessage("MAP REQUESTED!", DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
+				break;
+			case FileRequestResult::DownloadInProgress:
+				// do nothing - just wait
+				break;
+			case FileRequestResult::FileExists:
+				debug(LOG_FATAL, "Can't load map %s, even though we downloaded %s", game.map, filename);
+				abort();
+				break;
+			case FileRequestResult::FailedToOpenFileForWriting:
+				// TODO: How best to handle? Ideally, message + back out of lobby?
+				debug(LOG_FATAL, "Failed to open file for writing - unable to download file: %s", filename);
+				abort();
+				break;
 		}
 	}
 
@@ -292,10 +307,24 @@ void recvOptions(NETQUEUE queue)
 		char filename[256];
 		ssprintf(filename, "mods/downloads/%s", hash.toString().c_str());
 
-		if (requestFile(hash, filename))
+		auto requestResult = requestFile(hash, filename);
+		switch (requestResult)
 		{
-			debug(LOG_INFO, "Mod was not found, requesting mod %s from host", hash.toString().c_str());
-			addConsoleMessage("MOD REQUESTED!", DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
+			case FileRequestResult::StartingDownload:
+				debug(LOG_INFO, "Mod was not found, requesting mod %s from host", hash.toString().c_str());
+				addConsoleMessage("MOD REQUESTED!", DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
+				break;
+			case FileRequestResult::DownloadInProgress:
+				// do nothing - just wait
+				break;
+			case FileRequestResult::FileExists:
+				// Mod already exists / downloaded
+				break;
+			case FileRequestResult::FailedToOpenFileForWriting:
+				// TODO: How best to handle? Ideally, message + back out of lobby?
+				debug(LOG_FATAL, "Failed to open file for writing - unable to download file: %s", filename);
+				abort();
+				break;
 		}
 	}
 
@@ -320,13 +349,13 @@ void recvOptions(NETQUEUE queue)
 
 // ////////////////////////////////////////////////////////////////////////////
 // Host Campaign.
-bool hostCampaign(const char *SessionName, char *hostPlayerName, bool skipResetAIs)
+bool hostCampaign(const char *SessionName, char *hostPlayerName, bool spectatorHost, bool skipResetAIs)
 {
 	debug(LOG_WZ, "Hosting campaign: '%s', player: '%s'", SessionName, hostPlayerName);
 
 	freeMessages();
 
-	if (!NEThostGame(SessionName, hostPlayerName, static_cast<SDWORD>(game.type), 0, 0, 0, game.maxPlayers))
+	if (!NEThostGame(SessionName, hostPlayerName, spectatorHost, static_cast<uint32_t>(game.type), 0, 0, 0, game.maxPlayers))
 	{
 		return false;
 	}
@@ -334,7 +363,7 @@ bool hostCampaign(const char *SessionName, char *hostPlayerName, bool skipResetA
 	/* Skip resetting AIs if we are doing autohost */
 	if (NetPlay.bComms && !skipResetAIs)
 	{
-		for (unsigned i = 0; i < MAX_PLAYERS; i++)
+		for (unsigned i = 0; i < MAX_CONNECTED_PLAYERS; i++)
 		{
 			NetPlay.players[i].difficulty = AIDifficulty::DISABLED;
 		}
@@ -364,7 +393,7 @@ bool hostCampaign(const char *SessionName, char *hostPlayerName, bool skipResetA
 bool sendLeavingMsg()
 {
 	debug(LOG_NET, "We are leaving 'nicely'");
-	NETbeginEncode(NETnetQueue(NET_HOST_ONLY), NET_PLAYER_LEAVING);
+	NETbeginEncode(NETnetQueue(NetPlay.hostPlayer), NET_PLAYER_LEAVING);
 	{
 		bool host = NetPlay.isHost;
 		uint32_t id = selectedPlayer;
@@ -396,13 +425,26 @@ static bool gameInit()
 {
 	UDWORD			player;
 
-	for (player = 1; player < MAX_PLAYERS; player++)
+	for (player = 1; player < MAX_CONNECTED_PLAYERS; player++)
 	{
 		// we want to remove disabled AI & all the other players that don't belong
-		if ((NetPlay.players[player].difficulty == AIDifficulty::DISABLED || player >= game.maxPlayers) && player != scavengerPlayer())
+		if ((NetPlay.players[player].difficulty == AIDifficulty::DISABLED || player >= game.maxPlayers) && player != scavengerPlayer() && !(NetPlay.players[player].isSpectator && NetPlay.players[player].allocated))
 		{
 			clearPlayer(player, true);			// do this quietly
 			debug(LOG_NET, "removing disabled AI (%d) from map.", player);
+		}
+	}
+
+	for (auto i = 0; i < NetPlay.players.size(); i++)
+	{
+		if (NetPlay.players[i].isSpectator)
+		{
+			// player is starting as a spectator
+			makePlayerSpectator(i, true, true);
+			if (i == selectedPlayer)
+			{
+				setPlayerHasLost(true); // set this flag to true so we don't accumulate loss statistics
+			}
 		}
 	}
 
@@ -421,7 +463,7 @@ static bool gameInit()
 // say hi to everyone else....
 void playerResponding()
 {
-	ingame.startTime = gameTime;
+	ingame.startTime = std::chrono::steady_clock::now();
 	ingame.localJoiningInProgress = false; // No longer joining.
 	ingame.JoiningInProgress[selectedPlayer] = false;
 
@@ -440,7 +482,7 @@ bool multiGameInit()
 {
 	UDWORD player;
 
-	for (player = 0; player < MAX_PLAYERS; player++)
+	for (player = 0; player < MAX_CONNECTED_PLAYERS; player++)
 	{
 		openchannels[player] = true;								//open comms to this player.
 	}
@@ -454,19 +496,19 @@ bool multiGameInit()
 // at the end of every game.
 bool multiGameShutdown()
 {
-	PLAYERSTATS	st;
-	uint32_t        time;
-
 	debug(LOG_NET, "%s is shutting down.", getPlayerName(selectedPlayer));
 
 	sendLeavingMsg();							// say goodbye
 
-	st = getMultiStats(selectedPlayer);	// save stats
+	if (selectedPlayer < MAX_CONNECTED_PLAYERS)
+	{
+		PLAYERSTATS st = getMultiStats(selectedPlayer);	// save stats
 
-	saveMultiStats(getPlayerName(selectedPlayer), getPlayerName(selectedPlayer), &st);
+		saveMultiStats(getPlayerName(selectedPlayer), getPlayerName(selectedPlayer), &st);
+	}
 
 	// if we terminate the socket too quickly, then, it is possible not to get the leave message
-	time = wzGetTicks();
+	uint32_t time = wzGetTicks();
 	while (wzGetTicks() - time < 1000)
 	{
 		wzYieldCurrentThread();  // TODO Make a wzDelay() function?
@@ -481,8 +523,10 @@ bool multiGameShutdown()
 	ingame.localJoiningInProgress = false; // Clean up
 	ingame.localOptionsReceived = false;
 	ingame.side = InGameSide::MULTIPLAYER_CLIENT;
-	ingame.TimeEveryoneIsInGame = 0;
-	ingame.startTime = 0;
+	ingame.TimeEveryoneIsInGame = nullopt;
+	ingame.startTime = std::chrono::steady_clock::time_point();
+	ingame.lastLagCheck = std::chrono::steady_clock::time_point();
+	ingame.lastPlayerDataCheck2 = std::chrono::steady_clock::time_point();
 	NetPlay.isHost					= false;
 	bMultiPlayer					= false;	// Back to single player mode
 	bMultiMessages					= false;

@@ -1,26 +1,14 @@
 #version 450
 //#pragma debug(on)
 
-layout(set = 1, binding = 0) uniform sampler2D Texture; // diffuse
-layout(set = 1, binding = 1) uniform sampler2D TextureTcmask; // tcmask
-layout(set = 1, binding = 2) uniform sampler2D TextureNormal; // normal map
-layout(set = 1, binding = 3) uniform sampler2D TextureSpecular; // specular map
+layout(set = 3, binding = 0) uniform sampler2D Texture; // diffuse
+layout(set = 3, binding = 1) uniform sampler2D TextureTcmask; // tcmask
+layout(set = 3, binding = 2) uniform sampler2D TextureNormal; // normal map
+layout(set = 3, binding = 3) uniform sampler2D TextureSpecular; // specular map
 
-layout(std140, set = 0, binding = 0) uniform cbuffer
+layout(std140, set = 0, binding = 0) uniform globaluniforms
 {
-	vec4 colour;
-	vec4 teamcolour; // the team colour of the model
-	float stretch;
-	int tcmask; // whether a tcmask texture exists for the model
-	int fogEnabled; // whether fog is enabled
-	int normalmap; // whether a normal map exists for the model
-	int specularmap; // whether a specular map exists for the model
-	int ecmEffect; // whether ECM special effect is enabled
-	int alphaTest;
-	float graphicsCycle; // a periodically cycling value for special effects
-	mat4 ModelViewMatrix;
-	mat4 ModelViewProjectionMatrix;
-	mat4 NormalMatrix;
+	mat4 ProjectionMatrix;
 	vec4 lightPosition;
 	vec4 sceneColor;
 	vec4 ambient;
@@ -29,7 +17,27 @@ layout(std140, set = 0, binding = 0) uniform cbuffer
 	vec4 fogColor;
 	float fogEnd;
 	float fogStart;
+	float graphicsCycle;
+	int fogEnabled;
+};
+
+layout(std140, set = 1, binding = 0) uniform meshuniforms
+{
+	int tcmask;
+	int normalmap;
+	int specularmap;
 	int hasTangents;
+};
+
+layout(std140, set = 2, binding = 0) uniform instanceuniforms
+{
+	mat4 ModelViewMatrix;
+	mat4 NormalMatrix;
+	vec4 colour;
+	vec4 teamcolour;
+	float stretch;
+	int ecmEffect;
+	int alphaTest;
 };
 
 layout(location  = 0) in float vertexDistance;
@@ -57,9 +65,7 @@ void main()
 
 		// Complete replace normal with new value
 		N = normalFromMap.xzy * 2.0 - 1.0;
-
-		// To match wz's light
-		N.y = -N.y;
+		N.y = -N.y; // FIXME - to match WZ's light
 
 		// For object-space normal map
 		if (hasTangents == 0)
@@ -71,45 +77,41 @@ void main()
 
 	// Сalculate and combine final lightning
 	vec4 light = sceneColor;
-	vec3 L = lightDir; //can be normalized for better quality
-	float lambertTerm = max(dot(N, L), 0.0);
+	vec3 L = normalize(lightDir);
+	float lambertTerm = max(dot(N, L), 0.0); //diffuse light
 
 	if (lambertTerm > 0.0)
 	{
-		// Vanilla models shouldn't use diffuse light
-		float vanillaFactor = 0.0;
+		float vanillaFactor = 0.0; // Classic models shouldn't use diffuse light
 
 		if (specularmap != 0)
 		{
-			vec4 specularFromMap = texture(TextureSpecular, texCoord);
+			float specularMapValue = texture(TextureSpecular, texCoord).r;
+			vec4 specularFromMap = vec4(specularMapValue, specularMapValue, specularMapValue, 1.0);
 
 			// Gaussian specular term computation
 			vec3 H = normalize(halfVec);
-			float angle = acos(dot(H, N));
-			float exponent = angle / 0.2;
-			exponent = -(exponent * exponent);
-			float gaussianTerm = exp(exponent);
+			float exponent = acos(dot(H, N)) / 0.33; //0.33 is shininess
+			float gaussianTerm = exp(-(exponent * exponent));
 
 			light += specular * gaussianTerm * lambertTerm * specularFromMap;
 
-			// Neutralize factor for spec map
-			vanillaFactor = 1.0;
+			vanillaFactor = 1.0; // Neutralize factor for spec map
 		}
 
 		light += diffuse * lambertTerm * diffuseMap * vanillaFactor;
 	}
-	// NOTE: this doubled for non-spec map case to keep results similar to old shader
-	// We rely on specularmap to be either 1 or 0 to avoid adding another if
+	// ambient light maxed for classic models to keep results similar to original
 	light += ambient * diffuseMap * (1.0 + (1.0 - float(specularmap)));
 
 	vec4 fragColour;
 	if (tcmask != 0)
 	{
 		// Get mask for team colors from texture
-		vec4 mask = texture(TextureTcmask, texCoord);
+		float maskAlpha = texture(TextureTcmask, texCoord).r;
 
 		// Apply color using grain merge with tcmask
-		fragColour = (light + (teamcolour - 0.5) * mask.a) * colour;
+		fragColour = (light + (teamcolour - 0.5) * maskAlpha) * colour;
 	}
 	else
 	{
@@ -120,7 +122,7 @@ void main()
 	{
 		fragColour.a = 0.66 + 0.66 * graphicsCycle;
 	}
-
+	
 	if (fogEnabled > 0)
 	{
 		// Calculate linear fog
@@ -128,7 +130,7 @@ void main()
 		fogFactor = clamp(fogFactor, 0.0, 1.0);
 
 		// Return fragment color
-		fragColour = mix(fogColor, fragColour, fogFactor);
+		fragColour = mix(fragColour, vec4(fogColor.xyz, fragColour.w), fogFactor);
 	}
 
 	FragColor = fragColour;

@@ -28,7 +28,11 @@
 #include "lib/framework/frame.h"
 #include "lib/framework/strres.h"
 #include "lib/widget/widget.h"
+#include "lib/widget/gridlayout.h"
 #include "lib/widget/button.h"
+#include "lib/widget/paragraph.h"
+#include "lib/widget/label.h"
+#include "lib/widget/scrollablelist.h"
 #include "lib/sound/mixer.h" //for sound_GetUIVolume()
 /* Includes direct access to render library */
 #include "lib/ivis_opengl/pieblitfunc.h"
@@ -101,42 +105,15 @@
 
 #define	INTMAP_RESEARCHWIDTH	440
 #define INTMAP_RESEARCHHEIGHT	288
-
-/*dimensions for Title view section relative to IDINTMAP_MSGVIEW*/
-/*dimensions for PIE view section relative to IDINTMAP_MSGVIEW*/
-
-#define	INTMAP_TITLEX			0
-#define INTMAP_TITLEY			0
-#define	INTMAP_TITLEWIDTH		INTMAP_RESEARCHWIDTH
-#define INTMAP_TITLEHEIGHT		18
-#define	INTMAP_PIEX				3
-#define INTMAP_PIEY				24
+#define INTMAP_TITLEHEIGHT		25
 
 /*dimensions for FLIC view section relative to IDINTMAP_MSGVIEW*/
-#define	INTMAP_FLICX			245
-#define INTMAP_FLICY			24
 #define	INTMAP_FLICWIDTH		192
-#define INTMAP_FLICHEIGHT		170
-/*dimensions for TEXT view section relative to IDINTMAP_MSGVIEW*/
+#define INTMAP_FLICHEIGHT		168
 
-#define	INTMAP_TEXTX			0
-#define INTMAP_TEXTY			200
-#define	INTMAP_TEXTWIDTH		INTMAP_RESEARCHWIDTH
-#define INTMAP_TEXTHEIGHT		88
-#define TEXT_XINDENT				5
-#define TEXT_YINDENT				5
-
-/*dimensions for SEQTEXT view relative to IDINTMAP_MSGVIEW*/
-#define INTMAP_SEQTEXTX			0
-#define INTMAP_SEQTEXTY			0
-#define INTMAP_SEQTEXTWIDTH		INTMAP_RESEARCHWIDTH
-#define INTMAP_SEQTEXTHEIGHT		INTMAP_RESEARCHHEIGHT
-
-/*dimensions for SEQTEXT tab view relative to IDINTMAP_SEQTEXT*/
-#define INTMAP_SEQTEXTTABX		0
-#define INTMAP_SEQTEXTTABY		0
-#define INTMAP_SEQTEXTTABWIDTH		INTMAP_SEQTEXTWIDTH
-#define INTMAP_SEQTEXTTABHEIGHT		INTMAP_SEQTEXTHEIGHT
+/*dimensions for PIE view section relative to IDINTMAP_MSGVIEW*/
+#define	INTMAP_PIEWIDTH			238
+#define INTMAP_PIEHEIGHT		INTMAP_FLICHEIGHT
 
 //position for text on full screen video
 #define VIDEO_TEXT_TOP_X				20
@@ -158,17 +135,25 @@ static bool				playCurrent;
 
 /* functions declarations ****************/
 static bool intAddMessageForm(bool playCurrent);
+static const char* getMessageTitle(const MESSAGE& message);
 /*Displays the buttons used on the intelligence map */
 class IntMessageButton : public IntFancyButton
 {
 public:
 	IntMessageButton();
 
-	virtual void display(int xOffset, int yOffset);
+	virtual void display(int xOffset, int yOffset) override;
 
 	void setMessage(MESSAGE *msg)
 	{
 		psMsg = msg;
+	}
+
+	std::string getTip() override
+	{
+		ASSERT_OR_RETURN("", psMsg != nullptr, "Null message?");
+		const char* pMessageTitle = getMessageTitle(*psMsg);
+		return (pMessageTitle != nullptr) ? pMessageTitle : "";
 	}
 
 protected:
@@ -181,16 +166,7 @@ static void intIntelButtonPressed(bool proxMsg, UDWORD id);
 
 static void intDisplayPIEView(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset);
 static void intDisplayFLICView(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset);
-static void intDisplayTEXTView(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset);
 static void addVideoText(SEQ_DISPLAY *psSeqDisplay, UDWORD sequence);
-
-static void intDisplaySeqTextView(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset);
-static bool intDisplaySeqTextViewPage(VIEW_REPLAY *psViewReplay,
-                                      UDWORD x0, UDWORD y0,
-                                      UDWORD width, UDWORD height,
-                                      bool render,
-                                      size_t *major, size_t *minor);
-
 
 /*********************** VARIABLES ****************************/
 // The current message being displayed
@@ -275,6 +251,8 @@ bool intAddIntelMap()
 /* Add the Message sub form */
 static bool intAddMessageForm(bool _playCurrent)
 {
+	if (selectedPlayer >= MAX_PLAYERS) { return true; }
+
 	WIDGET *msgForm = widgGetFromID(psWScreen, IDINTMAP_FORM);
 
 	/* Add the Message form */
@@ -310,31 +288,6 @@ static bool intAddMessageForm(bool _playCurrent)
 		button->id = nextButtonId;
 		button->setMessage(psMessage);
 		msgList->addWidgetToLayout(button);
-
-		/* Set the tip and add the button */
-		RESEARCH *psResearch;
-		switch (psMessage->type)
-		{
-		case MSG_RESEARCH:
-			psResearch = getResearchForMsg(psMessage->pViewData);
-			if (psResearch)
-			{
-				button->setTip(_(psResearch->name.toUtf8().c_str()));
-			}
-			else
-			{
-				button->setTip(_("Research Update"));
-			}
-			break;
-		case MSG_CAMPAIGN:
-			button->setTip(_("Project Goals"));
-			break;
-		case MSG_MISSION:
-			button->setTip(_("Current Objective"));
-			break;
-		default:
-			break;
-		}
 
 		/* if the current message matches psSelected lock the button */
 		if (psMessage == psCurrentMsg)
@@ -372,8 +325,7 @@ static bool intAddMessageForm(bool _playCurrent)
 /*Add the 3D world view for the particular message */
 bool intAddMessageView(MESSAGE *psMessage)
 {
-	bool			Animate = true;
-	RESEARCH		*psResearch;
+	bool Animate = true;
 
 	// Is the form already up?
 	if (widgGetFromID(psWScreen, IDINTMAP_MSGVIEW) != nullptr)
@@ -397,7 +349,6 @@ bool intAddMessageView(MESSAGE *psMessage)
 
 	/* Add the close box */
 	W_BUTINIT sButInit;
-	sButInit.formID = IDINTMAP_MSGVIEW;
 	sButInit.id = IDINTMAP_CLOSE;
 	sButInit.x = intMapMsgView->width() - OPT_GAP - CLOSE_SIZE;
 	sButInit.y = OPT_GAP;
@@ -406,118 +357,87 @@ bool intAddMessageView(MESSAGE *psMessage)
 	sButInit.pTip = _("Close");
 	sButInit.pDisplay = intDisplayImageHilight;
 	sButInit.UserData = PACKDWORD_TRI(0, IMAGE_CLOSEHILIGHT , IMAGE_CLOSE);
-	if (!widgAddButton(psWScreen, &sButInit))
-	{
-		return false;
-	}
+	auto closeButton = std::make_shared<W_BUTTON>(&sButInit);
+	intMapMsgView->attach(closeButton);
+
+	auto title = std::make_shared<W_LABEL>();
+	title->setGeometry(0, 0, INTMAP_RESEARCHWIDTH, INTMAP_TITLEHEIGHT);
+	title->setFontColour(WZCOL_YELLOW);
+	title->setTextAlignment(WLAB_ALIGNCENTRE);
+	title->setFont(font_regular, WZCOL_YELLOW);
+	title->setString(getMessageTitle(*psMessage));
+	intMapMsgView->attach(title);
+
+	auto grid = std::make_shared<GridLayout>();
+	intMapMsgView->attach(grid);
+	grid->setGeometry(1, INTMAP_TITLEHEIGHT, INTMAP_RESEARCHWIDTH - 2, INTMAP_RESEARCHHEIGHT - 1 - INTMAP_TITLEHEIGHT);
+
+	auto messages = ScrollableListWidget::make();
+	messages->setItemSpacing(3);
+	messages->setBackgroundColor(WZCOL_TRANSPARENT_BOX);
+	messages->setPadding({10, 10, 10, 10});
 
 	if (psMessage->type != MSG_RESEARCH && psMessage->pViewData->type == VIEW_RPL)
 	{
-		VIEW_REPLAY	*psViewReplay;
-
-		psViewReplay = (VIEW_REPLAY *)psMessage->pViewData->pData;
-
-		/* Add a big tabbed text box for the subtitle text */
-		auto seqList = IntListTabWidget::make();
-		intMapMsgView->attach(seqList);
-		seqList->setChildSize(INTMAP_SEQTEXTTABWIDTH, INTMAP_SEQTEXTTABHEIGHT);
-		seqList->setChildSpacing(2, 2);
-		seqList->setGeometry(INTMAP_SEQTEXTX, INTMAP_SEQTEXTY, INTMAP_SEQTEXTWIDTH, INTMAP_SEQTEXTHEIGHT);
-		seqList->setTabPosition(ListTabWidget::Bottom);
-		// Don't think the tabs are actually ever used...
-
-		size_t cur_seq = 0, cur_seqpage = 0;
-		int nextPageId = IDINTMAP_SEQTEXTSTART;
-		do
+		auto psViewReplay = (VIEW_REPLAY *)psMessage->pViewData->pData;
+		for (const auto &seq: psViewReplay->seqList)
 		{
-			auto page = std::make_shared<W_FORM>();
-			seqList->attach(page);
-			page->id = nextPageId++;
-			page->displayFunction = intDisplaySeqTextView;
-			page->pUserData = psViewReplay;
-			seqList->addWidgetToLayout(page);
+			for (const auto &msg: seq.textMsg)
+			{
+				auto message = std::make_shared<Paragraph>();
+				message->setFontColour(WZCOL_TEXT_BRIGHT);
+				message->addText(msg.toUtf8());
+				messages->addItem(message);
+			}
 		}
-		while (!intDisplaySeqTextViewPage(psViewReplay, 0, 0, INTMAP_SEQTEXTTABWIDTH, INTMAP_SEQTEXTHEIGHT, false, &cur_seq, &cur_seqpage));
+
+		grid->place({0, 1, false}, {0, 1, true}, messages);
 
 		return true;
 	}
 
-	/*add the Label for the title box*/
-	W_LABINIT sLabInit;
-	sLabInit.id = IDINTMAP_TITLELABEL;
-	sLabInit.formID = IDINTMAP_MSGVIEW;
-	sLabInit.x = INTMAP_TITLEX + TEXT_XINDENT;
-	sLabInit.y = INTMAP_TITLEY + TEXT_YINDENT;
-	sLabInit.width = INTMAP_TITLEWIDTH;
-	sLabInit.height = INTMAP_TITLEHEIGHT;
-	//print research name in title bar
-
 	ASSERT_OR_RETURN(false, psMessage->type != MSG_PROXIMITY, "Invalid message type for research");
-
-	psResearch = getResearchForMsg(psMessage->pViewData);
-
-	ASSERT_OR_RETURN(false, psResearch != nullptr, "Research not found");
-	//sLabInit.pText=psResearch->pName;
-	sLabInit.pText = WzString::fromUtf8(_(psResearch->name.toUtf8().c_str()));
-
-	sLabInit.FontID = font_regular;
-	if (!widgAddLabel(psWScreen, &sLabInit))
-	{
-		return false;
-	}
 
 	/*Add the PIE box*/
 	W_FORMINIT sFormInit;
-	sFormInit.formID = IDINTMAP_MSGVIEW;
 	sFormInit.id = IDINITMAP_PIEVIEW;
 	sFormInit.style = WFORM_PLAIN;
-	sFormInit.x = INTMAP_PIEX;
-	sFormInit.y = INTMAP_PIEY;
 	sFormInit.width = INTMAP_PIEWIDTH;
 	sFormInit.height = INTMAP_PIEHEIGHT;
 	sFormInit.pDisplay = intDisplayPIEView;
 	sFormInit.pUserData = psMessage;
-	if (!widgAddForm(psWScreen, &sFormInit))
-	{
-		return false;
-	}
+	auto form3dView = std::make_shared<W_CLICKFORM>(&sFormInit);
 
 	/*Add the Flic box if videos are installed */
 	if (PHYSFS_exists("sequences/devastation.ogg"))
 	{
 		sFormInit = W_FORMINIT();
-		sFormInit.formID = IDINTMAP_MSGVIEW;
 		sFormInit.id = IDINTMAP_FLICVIEW;
 		sFormInit.style = WFORM_PLAIN;
-		sFormInit.x = INTMAP_FLICX;
-		sFormInit.y = INTMAP_FLICY;
 		sFormInit.width = INTMAP_FLICWIDTH;
 		sFormInit.height = INTMAP_FLICHEIGHT;
 		sFormInit.pDisplay = intDisplayFLICView;
 		sFormInit.pUserData = psMessage;
-		if (!widgAddForm(psWScreen, &sFormInit))
-		{
-			return false;
-		}
+		auto flicView = std::make_shared<W_FORM>(&sFormInit);
+
+		grid->place({0, 2, true}, {0, 1, false}, form3dView);
+		grid->place({2, 1, false}, {0, 1, false}, flicView);
+	}
+	else
+	{
+		grid->place({1, 1, false}, {0, 1, false}, form3dView);
 	}
 
 	/*Add the text box*/
-	sFormInit = W_FORMINIT();
-
-	sFormInit.formID = IDINTMAP_MSGVIEW;
-
-	sFormInit.id = IDINTMAP_TEXTVIEW;
-	sFormInit.style = WFORM_PLAIN;
-	sFormInit.x = INTMAP_TEXTX;
-	sFormInit.y = INTMAP_TEXTY;
-	sFormInit.width = INTMAP_TEXTWIDTH;
-	sFormInit.height = INTMAP_TEXTHEIGHT;
-	sFormInit.pDisplay = intDisplayTEXTView;
-	sFormInit.pUserData = psMessage;
-	if (!widgAddForm(psWScreen, &sFormInit))
+	for (const auto &msg: psMessage->pViewData->textMsg)
 	{
-		return false;
+		auto message = std::make_shared<Paragraph>();
+		message->setFontColour(WZCOL_TEXT_BRIGHT);
+		message->addText(msg.toUtf8());
+		messages->addItem(message);
 	}
+
+	grid->place({0, 3, true}, {1, 1, true}, messages);
 
 	return true;
 }
@@ -544,73 +464,6 @@ void intProcessIntelMap(UDWORD id)
 	{
 		intProcessMultiMenu(id);
 	}
-}
-
-/**
- * Draws the text for the intelligence display window.
- */
-static bool intDisplaySeqTextViewPage(VIEW_REPLAY *psViewReplay,
-                                      UDWORD x0, UDWORD y0,
-                                      UDWORD width, UDWORD height,
-                                      bool render,
-                                      size_t *cur_seq, size_t *cur_seqpage)
-{
-	if (!psViewReplay)
-	{
-		return true;	/* nothing to do */
-	}
-
-	iV_SetTextColour(WZCOL_TEXT_BRIGHT);
-	unsigned cur_y = y0 + iV_GetTextLineSize(font_regular) / 2 + 2 * TEXT_YINDENT;
-
-	/* add each message */
-	size_t i;
-	size_t sequence;
-	for (sequence = *cur_seq, i = *cur_seqpage; sequence < psViewReplay->seqList.size(); sequence++)
-	{
-		const SEQ_DISPLAY *psSeqDisplay = &psViewReplay->seqList.at(sequence);
-		for (; i < psSeqDisplay->textMsg.size(); i++)
-		{
-			if (render)
-			{
-				cur_y = iV_DrawFormattedText(psSeqDisplay->textMsg[i].toUtf8().c_str(),
-				                             x0 + TEXT_XINDENT, cur_y, width, false, font_regular);
-			}
-			else
-			{
-				cur_y += iV_GetTextLineSize(font_regular);
-			}
-			if (cur_y > y0 + height)
-			{
-				/* run out of room - need to make new tab */
-				*cur_seq = sequence;
-				*cur_seqpage = i;
-				return false;
-			}
-		}
-		i = 0;
-	}
-
-	return true;		/* done */
-}
-
-/**
- * Draw the text window for the intelligence display
- */
-static void intDisplaySeqTextView(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
-{
-	VIEW_REPLAY *psViewReplay = (VIEW_REPLAY *)psWidget->pUserData;
-	size_t cur_seq, cur_seqpage;
-
-	int x0 = xOffset + psWidget->x();
-	int y0 = yOffset + psWidget->y();
-
-	RenderWindowFrame(FRAME_NORMAL, x0, y0, psWidget->width(), psWidget->height());
-
-	/* work out where we're up to in the text */
-	cur_seq = cur_seqpage = 0;
-
-	intDisplaySeqTextViewPage(psViewReplay, x0, y0, psWidget->width() - 40, psWidget->height(), true, &cur_seq, &cur_seqpage);
 }
 
 
@@ -820,15 +673,18 @@ static void intCleanUpIntelMap()
 	MESSAGE		*psMessage, *psNext;
 	bool removedAMessage = false;
 
-	//remove any research messages that have been read
-	for (psMessage = apsMessages[selectedPlayer]; psMessage != nullptr; psMessage =
-	         psNext)
+	if (selectedPlayer < MAX_PLAYERS)
 	{
-		psNext = psMessage->psNext;
-		if (psMessage->type == MSG_RESEARCH && psMessage->read)
+		//remove any research messages that have been read
+		for (psMessage = apsMessages[selectedPlayer]; psMessage != nullptr; psMessage =
+				 psNext)
 		{
-			removeMessage(psMessage, selectedPlayer);
-			removedAMessage = true;
+			psNext = psMessage->psNext;
+			if (psMessage->type == MSG_RESEARCH && psMessage->read)
+			{
+				removeMessage(psMessage, selectedPlayer);
+				removedAMessage = true;
+			}
 		}
 	}
 	if (removedAMessage)
@@ -1033,11 +889,11 @@ void intDisplayPIEView(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
 	{
 		int x0 = xOffset + psWidget->x();
 		int y0 = yOffset + psWidget->y();
-		int x1 = x0 + psWidget->width();
-		int y1 = y0 + psWidget->height();
+		int width = psWidget->width();
+		int height = psWidget->height();
 
 		//moved from after close render
-		RenderWindowFrame(FRAME_NORMAL, x0 - 1, y0 - 1, x1 - x0 + 2, y1 - y0 + 2);
+		RenderWindowFrame(FRAME_NORMAL, x0, y0, width, height);
 
 		if (psMessage->pViewData->type != VIEW_RES)
 		{
@@ -1047,13 +903,13 @@ void intDisplayPIEView(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
 
 		//render an object
 		psResearch = getResearchForMsg(psCurrentMsg->pViewData);
-		renderResearchToBuffer(psResearch, x0 + (x1 - x0) / 2, y0 + (y1 - y0) / 2);
+		renderResearchToBuffer(psResearch, x0 + width / 2, y0 + height / 2);
 
 		//draw image icon in top left of window
 		image = (SWORD)getResearchForMsg(psMessage->pViewData)->iconID;
 		if (image > 0)
 		{
-			iV_DrawImage(IntImages, image, x0, y0);
+			iV_DrawImage(IntImages, image, x0 + 3, y0 + 3);
 		}
 	}
 }
@@ -1086,52 +942,9 @@ void intDisplayFLICView(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
 		RenderWindowFrame(FRAME_NORMAL, x0, y0, x1 - x0, y1 - y0);
 		psViewResearch = (VIEW_RESEARCH *)psCurrentMsg->pViewData->pData;
 		// set the dimensions to window size & position
-		seq_SetDisplaySize(192, 168, x0, y0);
+		seq_SetDisplaySize(INTMAP_FLICWIDTH, INTMAP_FLICHEIGHT, x0, y0);
 		//render a frame of the current movie *must* force above resolution!
 		seq_RenderVideoToBuffer(psViewResearch->sequenceName, SEQUENCE_HOLD);
-	}
-}
-
-/**
- * Displays the TEXT view for the current message.
- * If this function breaks, please merge it with intDisplaySeqTextViewPage
- * which presumably does almost the same.
- */
-void intDisplayTEXTView(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
-{
-	MESSAGE *psMessage = (MESSAGE *)psWidget->pUserData;
-
-	int x0 = xOffset + psWidget->x();
-	int y0 = yOffset + psWidget->y();
-	int x1 = x0 + psWidget->width();
-	int y1 = y0 + psWidget->height();
-	int ty = y0;
-
-	RenderWindowFrame(FRAME_NORMAL, x0, y0, x1 - x0, y1 - y0);
-
-	if (psMessage)
-	{
-		/* Get the travel to the next line */
-		int linePitch = iV_GetTextLineSize(font_regular);
-		/* Fix for spacing.... */
-		linePitch += 3;
-		ty += 3;
-		/* Fix for spacing.... */
-
-		iV_SetTextColour(WZCOL_TEXT_BRIGHT);
-		//add each message
-		for (unsigned i = 0; i < psMessage->pViewData->textMsg.size(); i++)
-		{
-			//check haven't run out of room first!
-			if (i * linePitch > psWidget->height())
-			{
-				ASSERT(false, "intDisplayTEXTView: Run out of room!");
-				return;
-			}
-			//need to check the string will fit!
-			iV_DrawText(_(psMessage->pViewData->textMsg[i].toUtf8().c_str()), x0 + TEXT_XINDENT,
-			            (ty + TEXT_YINDENT * 3) + (i * linePitch), font_regular);
-		}
 	}
 }
 
@@ -1153,7 +966,7 @@ void addVideoText(SEQ_DISPLAY *psSeqDisplay, UDWORD sequence)
 		//add each message, the rest at the bottom
 		x = VIDEO_TEXT_BOTTOM_X;
 		// calculate the real bottom... NOTE, game assumes all videos to be 640x480
-		y = (double)pie_GetVideoBufferHeight() / 480. * (double)VIDEO_TEXT_BOTTOM_Y;
+		y = static_cast<UDWORD>((double)pie_GetVideoBufferHeight() / 480. * (double)VIDEO_TEXT_BOTTOM_Y);
 		i = 1;
 		while (i < psSeqDisplay->textMsg.size())
 		{
@@ -1169,6 +982,8 @@ void addVideoText(SEQ_DISPLAY *psSeqDisplay, UDWORD sequence)
 void setCurrentMsg()
 {
 	MESSAGE *psMsg, *psLastMsg;
+
+	ASSERT_OR_RETURN(, selectedPlayer < MAX_PLAYERS, "Unsupported selectedPlayer: %" PRIu32 "", selectedPlayer);
 
 	psLastMsg = nullptr;
 	for (psMsg = apsMessages[selectedPlayer]; psMsg != nullptr; psMsg =
@@ -1218,7 +1033,6 @@ void resetIntelligencePauseState()
 		setConsolePause(false);
 		gameTimeStart();
 		screen_StopBackDrop();
-		pie_ScreenFlip(CLEAR_BLACK);
 	}
 }
 
@@ -1265,4 +1079,24 @@ void intRunIntelMap()
 		// clear key press so we don't enter in-game options
 		inputLoseFocus();
 	}
+}
+
+static const char* getMessageTitle(const MESSAGE& message)
+{
+	RESEARCH* research;
+
+	switch (message.type)
+	{
+	case MSG_RESEARCH:
+		research = getResearchForMsg(message.pViewData);
+		return research ? _(research->name.toUtf8().c_str()) : _("Research Update");
+	case MSG_CAMPAIGN:
+		return _("Project Goals and Updates");
+	case MSG_MISSION:
+		return _("Current Objective");
+	default:
+		return nullptr;
+	}
+
+	return nullptr;
 }

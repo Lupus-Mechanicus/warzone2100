@@ -105,6 +105,7 @@ size_t loopPolyCount;
  */
 static bool paused = false;
 static bool video = false;
+static unsigned short int skipCounter = 0;
 
 //holds which pause is valid at any one time
 struct PAUSE_STATE
@@ -116,6 +117,8 @@ struct PAUSE_STATE
 	bool consolePause;
 };
 static PAUSE_STATE pauseState;
+static size_t maxFastForwardTicks = WZ_DEFAULT_MAX_FASTFORWARD_TICKS;
+static bool fastForwardTicksFixedToNormalTickRate = false; // default for spectators to "catch-up" as quickly as possible
 
 static unsigned numDroids[MAX_PLAYERS];
 static unsigned numMissionDroids[MAX_PLAYERS];
@@ -144,10 +147,15 @@ static GAMECODE renderLoop()
 	INT_RETVAL intRetVal = INT_NONE;
 	if (!paused)
 	{
+		/* Always refresh the widgets' backing stores if needed, even if we don't process clicks below */
+		intDoScreenRefresh();
+
 		/* Run the in game interface and see if it grabbed any mouse clicks */
 		if (!getRotActive() && getWidgetsStatus() && dragBox3D.status != DRAG_DRAGGING && wallDrag.status != DRAG_DRAGGING)
 		{
 			intRetVal = intRunWidgets();
+			screen_FlipIfBackDropTransition();
+
 			// Send droid orders, if any. (Should do between intRunWidgets() calls, to avoid droid orders getting mixed up, in the case of multiple orders given while the game freezes due to net lag.)
 			sendQueuedDroidInfo();
 		}
@@ -330,15 +338,6 @@ static GAMECODE renderLoop()
 
 	pie_GetResetCounts(&loopPieCount, &loopPolyCount);
 
-	if (!quitting)
-	{
-		/* Check for toggling display mode */
-		if ((keyDown(KEY_LALT) || keyDown(KEY_RALT)) && keyPressed(KEY_RETURN))
-		{
-			war_setWindowMode(wzAltEnterToggleFullscreen());
-		}
-	}
-
 	// deal with the mission state
 	switch (loopMissionState)
 	{
@@ -387,11 +386,6 @@ static GAMECODE renderLoop()
 
 	if (quitting)
 	{
-		/* Check for toggling display mode */
-		if ((keyDown(KEY_LALT) || keyDown(KEY_RALT)) && keyPressed(KEY_RETURN))
-		{
-			war_setWindowMode(wzAltEnterToggleFullscreen());
-		}
 		return GAMECODE_QUITGAME;
 	}
 	else if (loop_GetVideoStatus())
@@ -612,11 +606,23 @@ static void gameStateUpdate()
 	countUpdate(true);
 }
 
+size_t getMaxFastForwardTicks()
+{
+	return maxFastForwardTicks;
+}
+
+void setMaxFastForwardTicks(optional<size_t> value, bool fixedToNormalTickRate)
+{
+	maxFastForwardTicks = value.value_or(WZ_DEFAULT_MAX_FASTFORWARD_TICKS);
+	fastForwardTicksFixedToNormalTickRate = fixedToNormalTickRate;
+}
+
 /* The main game loop */
 GAMECODE gameLoop()
 {
 	static uint32_t lastFlushTime = 0;
 
+	static size_t numForcedUpdatesLastCall = 0;
 	static int renderBudget = 0;  // Scaled time spent rendering minus scaled time spent updating.
 	static bool previousUpdateWasRender = false;
 	const Rational renderFraction(2, 5);  // Minimum fraction of time spent rendering.
@@ -625,14 +631,38 @@ GAMECODE gameLoop()
 	// Shouldn't this be when initialising the game, rather than randomly called between ticks?
 	countUpdate(false); // kick off with correct counts
 
+	size_t numRegularUpdatesTicks = 0;
+	size_t numFastForwardTicks = 0;
+	gameTimeUpdateBegin();
 	while (true)
 	{
 		// Receive NET_BLAH messages.
 		// Receive GAME_BLAH messages, and if it's time, process exactly as many GAME_BLAH messages as required to be able to tick the gameTime.
 		recvMessage();
 
+		bool selectedPlayerIsSpectator = bMultiPlayer && NetPlay.players[selectedPlayer].isSpectator;
+		bool multiplayerHostDisconnected = bMultiPlayer && !NetPlay.isHostAlive && NetPlay.bComms && !NetPlay.isHost; // do not fast-forward after the host has disconnected
+		bool canFastForwardGameTime =
+			selectedPlayerIsSpectator 			// current player must be a spectator
+			&& !NetPlay.isHost					// AND NOT THE HOST (!)
+			&& !multiplayerHostDisconnected		// and the multiplayer host must not be disconnected ("host quit")
+			&& numFastForwardTicks < maxFastForwardTicks // and the number of forced updates this call of gameLoop must not exceed the max allowed
+			&& checkPlayerGameTime(NET_ALL_PLAYERS);	// and there must be a new game tick available to process from all players
+
+		bool forceTryGameTickUpdate = canFastForwardGameTime && ((!fastForwardTicksFixedToNormalTickRate && numForcedUpdatesLastCall > 0) || numRegularUpdatesTicks > 0);
+
 		// Update gameTime and graphicsTime, and corresponding deltas. Note that gameTime and graphicsTime pause, if we aren't getting our GAME_GAME_TIME messages.
-		gameTimeUpdate(renderBudget > 0 || previousUpdateWasRender);
+		auto timeUpdateResult = gameTimeUpdate(renderBudget > 0 || previousUpdateWasRender, forceTryGameTickUpdate);
+
+		if (timeUpdateResult == GameTimeUpdateResult::GAME_TIME_UPDATED_FORCED)
+		{
+			numFastForwardTicks++;
+			// FUTURE TODO: Could trigger the display of a UI icon here (if (numFastForwardTicks == maxFastForwardTicks)?) to indicate that the game is fast-forwarding substantially
+		}
+		else if (timeUpdateResult == GameTimeUpdateResult::GAME_TIME_UPDATED)
+		{
+			numRegularUpdatesTicks++;
+		}
 
 		if (deltaGameTime == 0)
 		{
@@ -653,6 +683,7 @@ GAMECODE gameLoop()
 
 		ASSERT(deltaGraphicsTime == 0, "Shouldn't update graphics and game state at once.");
 	}
+	numForcedUpdatesLastCall = numFastForwardTicks;
 
 	if (realTime - lastFlushTime >= 400u)
 	{
@@ -688,8 +719,13 @@ void videoLoop()
 	videoFinished = !seq_UpdateFullScreenVideo(nullptr);
 	pie_ScreenFlip(CLEAR_BLACK);
 
+	if (skipCounter <= SEQUENCE_MIN_SKIP_DELAY)
+	{
+		skipCounter += 1; // "time" is stopped so we will count via loop iterations.
+	}
+
 	// should we stop playing?
-	if (videoFinished || keyPressed(KEY_ESC) || mouseReleased(MOUSE_LMB))
+	if (videoFinished || (skipCounter > SEQUENCE_MIN_SKIP_DELAY && (keyPressed(KEY_ESC) || mouseReleased(MOUSE_LMB))))
 	{
 		seq_StopFullScreenVideo();
 
@@ -718,6 +754,7 @@ void videoLoop()
 
 void loop_SetVideoPlaybackMode()
 {
+	skipCounter = 0;
 	videoMode += 1;
 	paused = true;
 	video = true;
@@ -732,6 +769,7 @@ void loop_SetVideoPlaybackMode()
 
 void loop_ClearVideoPlaybackMode()
 {
+	skipCounter = 0;
 	videoMode -= 1;
 	paused = false;
 	video = false;

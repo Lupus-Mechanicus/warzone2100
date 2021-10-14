@@ -26,6 +26,7 @@
 #include "lib/framework/wzconfig.h"
 #include "lib/framework/wzpaths.h"
 #include "lib/framework/fixedpoint.h"
+#include "lib/framework/string_ext.h"
 #include "lib/sound/audio.h"
 #include "lib/sound/cdaudio.h"
 #include "lib/netplay/netplay.h"
@@ -72,11 +73,13 @@
 #include "wzapi.h"
 #include "qtscript.h"
 #include "featuredef.h"
+#include "data.h"
 
 
 #include <unordered_set>
 #include "lib/framework/file.h"
 #include <unordered_map>
+#include <limits>
 
 #if !defined(__clang__) && defined(__GNUC__) && __GNUC__ >= 8
 #pragma GCC diagnostic push
@@ -135,11 +138,6 @@ bool QuickJS_EnumerateObjectProperties(JSContext *ctx, JSValue obj, const std::f
 class quickjs_scripting_instance;
 static std::map<JSContext*, quickjs_scripting_instance *> engineToInstanceMap;
 
-static void QJSRuntimeFree_LeakHandler_Warning(const char* msg)
-{
-	debug(LOG_WARNING, "QuickJS FreeRuntime leak: %s", msg);
-}
-
 static void QJSRuntimeFree_LeakHandler_Error(const char* msg)
 {
 	debug(LOG_ERROR, "QuickJS FreeRuntime leak: %s", msg);
@@ -152,7 +150,9 @@ public:
 	: scripting_instance(player, scriptName, scriptPath)
 	{
 		rt = JS_NewRuntime();
+		ASSERT(rt != nullptr, "JS_NewRuntime failed?");
 		ctx = JS_NewContext(rt);
+		ASSERT(ctx != nullptr, "JS_NewContext failed?");
 		global_obj = JS_GetGlobalObject(ctx);
 
 		engineToInstanceMap.insert(std::pair<JSContext*, quickjs_scripting_instance*>(ctx, this));
@@ -168,10 +168,18 @@ public:
 		}
 
 		JS_FreeValue(ctx, global_obj);
-		JS_FreeContext(ctx);
-		ctx = nullptr;
-		JS_FreeRuntime2(rt, QJSRuntimeFree_LeakHandler_Error);
-		rt = nullptr;
+		ASSERT(ctx != nullptr, "context is null??");
+		if (ctx)
+		{
+			JS_FreeContext(ctx);
+			ctx = nullptr;
+		}
+		ASSERT(rt != nullptr, "runtime is null??");
+		if (rt)
+		{
+			JS_FreeRuntime2(rt, QJSRuntimeFree_LeakHandler_Error);
+			rt = nullptr;
+		}
 	}
 	bool loadScript(const WzString& path, int player, int difficulty);
 	bool readyInstanceForExecution() override;
@@ -423,11 +431,11 @@ public:
 	//__
 	virtual bool handle_eventObjectRecycled(const BASE_OBJECT *psObj) override;
 
-	//__ ## eventPlayerLeft(player index)
+	//__ ## eventPlayerLeft(player)
 	//__
 	//__ An event that is run after a player has left the game.
 	//__
-	virtual bool handle_eventPlayerLeft(int id) override;
+	virtual bool handle_eventPlayerLeft(int player) override;
 
 	//__ ## eventCheatMode(entered)
 	//__
@@ -472,6 +480,12 @@ public:
 	//__ register your own timer to keep checking.
 	//__
 	virtual bool handle_eventStructureReady(const STRUCTURE *psStruct) override;
+
+	//__ ## eventStructureUpgradeStarted(structure)
+	//__
+	//__ An event that is run every time a structure starts to be upgraded.
+	//__
+	virtual bool handle_eventStructureUpgradeStarted(const STRUCTURE *psStruct) override;
 
 	//__ ## eventAttacked(victim, attacker)
 	//__
@@ -622,15 +636,6 @@ public:
 		if (!_wzeval) { debug(LOG_ERROR, __VA_ARGS__); \
 			JS_ThrowReferenceError(context, "%s failed in %s at line %d", #expr, __FUNCTION__, __LINE__); \
 			return JS_NULL; } } while (0)
-
-#define SCRIPT_ASSERT_AND_RETURNERROR(context, expr, ...) \
-	do { bool _wzeval = (expr); \
-		if (!_wzeval) { debug(LOG_ERROR, __VA_ARGS__); \
-			return JS_ThrowReferenceError(context, "%s failed in %s at line %d", #expr, __FUNCTION__, __LINE__); \
-			} } while (0)
-
-#define SCRIPT_ASSERT_PLAYER(_context, _player) \
-	SCRIPT_ASSERT(_context, _player >= 0 && _player < MAX_PLAYERS, "Invalid player index %d", _player);
 
 
 // ----------------------------------------------------------------------------------------
@@ -2230,7 +2235,7 @@ static JSValue callFunction(JSContext *ctx, const std::string &function, std::ve
 
 // Wraps a QuickJS instance
 
-//-- ## profile(function[, arguments])
+//-- ## profile(functionName[, arguments])
 //-- Calls a function with given arguments, measures time it took to evaluate the function,
 //-- and adds this time to performance monitor statistics. Transparently returns the
 //-- function's return value. The function to run is the first parameter, and it
@@ -2240,13 +2245,13 @@ static JSValue js_profile(JSContext *ctx, JSValueConst this_val, int argc, JSVal
 {
 	SCRIPT_ASSERT(ctx, argc >= 1, "Must have at least one parameter");
 	SCRIPT_ASSERT(ctx, JS_IsString(argv[0]), "Profiled functions must be quoted");
-	std::string funcName = JSValueToStdString(ctx, argv[0]);
+	std::string functionName = JSValueToStdString(ctx, argv[0]);
 	std::vector<JSValue> args;
 	for (int i = 1; i < argc; ++i)
 	{
 		args.push_back(argv[i]);
 	}
-	return callFunction(ctx, funcName, args);
+	return callFunction(ctx, functionName, args);
 }
 
 static std::string QuickJS_DumpObject(JSContext *ctx, JSValue obj)
@@ -2284,12 +2289,7 @@ static std::string QuickJS_DumpError(JSContext *ctx)
 	return result;
 }
 
-static bool strEndsWith(const std::string &str, const std::string &suffix)
-{
-	return (str.size() >= suffix.size()) && (str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0);
-}
-
-//-- ## include(file)
+//-- ## include(filePath)
 //-- Includes another source code file at this point. You should generally only specify the filename,
 //-- not try to specify its path, here.
 //-- However, *if* you specify sub-paths / sub-folders, the path separator should **always** be forward-slash ("/").
@@ -2334,7 +2334,7 @@ static JSValue js_include(JSContext *ctx, JSValueConst this_val, int argc, JSVal
 	return JS_TRUE;
 }
 
-//-- ## includeJSON(file)
+//-- ## includeJSON(filePath)
 //-- Reads a JSON file and returns an object. You should generally only specify the filename,
 //-- However, *if* you specify sub-paths / sub-folders, the path separator should **always** be forward-slash ("/").
 //--
@@ -2391,7 +2391,7 @@ static uniqueTimerID SetQuickJSTimer(JSContext *ctx, int player, const std::stri
 	, std::unique_ptr<timerAdditionalData>(new quickjs_timer_additionaldata(stringArg)));
 }
 
-//-- ## setTimer(function, milliseconds[, object])
+//-- ## setTimer(functionName, milliseconds[, object])
 //--
 //-- Set a function to run repeated at some given time interval. The function to run
 //-- is the first parameter, and it _must be quoted_, otherwise the function will
@@ -2401,27 +2401,27 @@ static uniqueTimerID SetQuickJSTimer(JSContext *ctx, int player, const std::stri
 //-- fast timers are strongly discouraged as they may deteriorate the game performance.
 //--
 //-- ```javascript
-//--   function conDroids()
-//--   {
-//--      ... do stuff ...
-//--   }
-//--   // call conDroids every 4 seconds
-//--   setTimer("conDroids", 4000);
+//-- function conDroids()
+//-- {
+//--   ... do stuff ...
+//-- }
+//-- // call conDroids every 4 seconds
+//-- setTimer("conDroids", 4000);
 //-- ```
 //--
 static JSValue js_setTimer(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
 	SCRIPT_ASSERT(ctx, argc >= 2, "Must have at least two parameters");
 	SCRIPT_ASSERT(ctx, JS_IsString(argv[0]), "Timer functions must be quoted");
-	std::string funcName = JSValueToStdString(ctx, argv[0]);
+	std::string functionName = JSValueToStdString(ctx, argv[0]);
 	int32_t ms = JSValueToInt32(ctx, argv[1]);
 
 	JSValue global_obj = JS_GetGlobalObject(ctx);
 	auto free_global_obj = gsl::finally([ctx, global_obj] { JS_FreeValue(ctx, global_obj); });  // establish exit action
 	int player = QuickJS_GetInt32(ctx, global_obj, "me");
 
-	JSValue funcObj = JS_GetPropertyStr(ctx, global_obj, funcName.c_str()); // check existence
-	SCRIPT_ASSERT(ctx, JS_IsFunction(ctx, funcObj), "No such function: %s", funcName.c_str());
+	JSValue funcObj = JS_GetPropertyStr(ctx, global_obj, functionName.c_str()); // check existence
+	SCRIPT_ASSERT(ctx, JS_IsFunction(ctx, funcObj), "No such function: %s", functionName.c_str());
 	JS_FreeValue(ctx, funcObj);
 
 	std::string stringArg;
@@ -2441,12 +2441,12 @@ static JSValue js_setTimer(JSContext *ctx, JSValueConst this_val, int argc, JSVa
 		}
 	}
 
-	SetQuickJSTimer(ctx, player, funcName, ms, stringArg, psObj, TIMER_REPEAT);
+	SetQuickJSTimer(ctx, player, functionName, ms, stringArg, psObj, TIMER_REPEAT);
 
 	return JS_TRUE;
 }
 
-//-- ## removeTimer(function)
+//-- ## removeTimer(functionName)
 //--
 //-- Removes an existing timer. The first parameter is the function timer to remove,
 //-- and its name _must be quoted_.
@@ -2455,7 +2455,7 @@ static JSValue js_removeTimer(JSContext *ctx, JSValueConst this_val, int argc, J
 {
 	SCRIPT_ASSERT(ctx, argc == 1, "Must have one parameter");
 	SCRIPT_ASSERT(ctx, JS_IsString(argv[0]), "Timer functions must be quoted");
-	std::string function = JSValueToStdString(ctx, argv[0]);
+	std::string functionName = JSValueToStdString(ctx, argv[0]);
 
 	JSValue global_obj = JS_GetGlobalObject(ctx);
 	auto free_global_obj = gsl::finally([ctx, global_obj] { JS_FreeValue(ctx, global_obj); });  // establish exit action
@@ -2463,21 +2463,21 @@ static JSValue js_removeTimer(JSContext *ctx, JSValueConst this_val, int argc, J
 
 	wzapi::scripting_instance* instance = engineToInstanceMap.at(ctx);
 	std::vector<uniqueTimerID> removedTimerIDs = scripting_engine::instance().removeTimersIf(
-		[instance, function, player](const scripting_engine::timerNode& node)
+		[instance, functionName, player](const scripting_engine::timerNode& node)
 	{
-		return (node.instance == instance) && (node.timerName == function) && (node.player == player);
+		return node.instance == instance && node.timerName == functionName && node.player == player;
 	});
 	if (removedTimerIDs.empty())
 	{
 		// Friendly warning
-		std::string warnName = function;
+		std::string warnName = functionName;
 		debug(LOG_ERROR, "Did not find timer %s to remove", warnName.c_str());
 		return JS_FALSE;
 	}
 	return JS_TRUE;
 }
 
-//-- ## queue(function[, milliseconds[, object]])
+//-- ## queue(functionName[, milliseconds[, object]])
 //--
 //-- Queues up a function to run at a later game frame. This is useful to prevent
 //-- stuttering during the game, which can happen if too much script processing is
@@ -2494,13 +2494,13 @@ static JSValue js_queue(JSContext *ctx, JSValueConst this_val, int argc, JSValue
 {
 	SCRIPT_ASSERT(ctx, argc >= 1, "Must have at least one parameter");
 	SCRIPT_ASSERT(ctx, JS_IsString(argv[0]), "Queued functions must be quoted");
-	std::string funcName = JSValueToStdString(ctx, argv[0]);
+	std::string functionName = JSValueToStdString(ctx, argv[0]);
 
 	JSValue global_obj = JS_GetGlobalObject(ctx);
 	auto free_global_obj = gsl::finally([ctx, global_obj] { JS_FreeValue(ctx, global_obj); });  // establish exit action
 
-	JSValue funcObj = JS_GetPropertyStr(ctx, global_obj, funcName.c_str()); // check existence
-	SCRIPT_ASSERT(ctx, JS_IsFunction(ctx, funcObj), "No such function: %s", funcName.c_str());
+	JSValue funcObj = JS_GetPropertyStr(ctx, global_obj, functionName.c_str()); // check existence
+	SCRIPT_ASSERT(ctx, JS_IsFunction(ctx, funcObj), "No such function: %s", functionName.c_str());
 	JS_FreeValue(ctx, funcObj);
 
 	int32_t ms = 0;
@@ -2527,7 +2527,7 @@ static JSValue js_queue(JSContext *ctx, JSValueConst this_val, int argc, JSValue
 		}
 	}
 
-	SetQuickJSTimer(ctx, player, funcName, ms, stringArg, psObj, TIMER_ONESHOT_READY);
+	SetQuickJSTimer(ctx, player, functionName, ms, stringArg, psObj, TIMER_ONESHOT_READY);
 
 	return JS_TRUE;
 }
@@ -2557,16 +2557,16 @@ static JSValue debugGetCallerFuncObject(JSContext *ctx, JSValueConst this_val, i
 //-- Returns the function name of the caller of the current context as a string (if available).
 //-- ex.
 //-- ```javascript
-//--   function FuncA() {
-//--     var callerFuncName = debugGetCallerFuncName();
-//--     debug(callerFuncName);
-//--   }
-//--   function FuncB() {
-//--     FuncA();
-//--   }
-//--   FuncB();
+//-- function funcA() {
+//--   const callerFuncName = debugGetCallerFuncName();
+//--   debug(callerFuncName);
+//-- }
+//-- function funcB() {
+//--   funcA();
+//-- }
+//-- funcB();
 //-- ```
-//-- Will output: "FuncB"
+//-- Will output: "funcB"
 //-- Useful for debug logging.
 //--
 static JSValue debugGetCallerFuncName(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
@@ -2577,284 +2577,6 @@ static JSValue debugGetCallerFuncName(JSContext *ctx, JSValueConst this_val, int
 static JSValue debugGetBacktrace(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
 	return js_debugger_build_backtrace(ctx, nullptr);
-}
-
-//MAP-- ## gameRand([mod])
-//MAP--
-//MAP-- Generates a random number in a "safe" way, that will ensure that randomly-generated
-//MAP-- maps are the same for all connected players.
-//MAP--
-static JSValue runMap_gameRand(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-	void* pOpaque = JS_GetContextOpaque(ctx);
-	if (!pOpaque)
-	{
-		return JS_ThrowInternalError(ctx, "Unable to acquire context information");
-	}
-	auto &data = *static_cast<ScriptMapData*>(pOpaque);
-	uint32_t num = data.mt.u32();
-	uint32_t mod = (argc >= 1) ? JSValueToUint32(ctx, argv[0]) : 0;
-	uint32_t result = mod? num%mod : num;
-	return JS_NewUint32(ctx, result);
-}
-
-//MAP-- ## log(string)
-//MAP--
-//MAP-- Outputs to the game's debug log a string (or object that can be converted to string)
-//MAP--
-static JSValue runMap_log(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-	SCRIPT_ASSERT(ctx, argc == 1, "Must have one parameter");
-	std::string str = JSValueToStdString(ctx, argv[0]);
-	debug(LOG_INFO, "game.js: \"%s\"", str.c_str());
-	return JS_UNDEFINED;
-}
-
-//MAP-- ## setMapData(mapWidth, mapHeight, texture, height, structures, droids, features)
-//MAP--
-//MAP-- Sets map data from that generated by the script.
-//MAP--
-//MAP-- (NOTE: Documentation incomplete. Look at the example mapScript maps: 6c-Entropy/game.js, 10c-WaterLoop/game.js)
-//MAP--
-//MAP-- `structures` is an array of structure data objects. Example:
-//MAP--    {name: "A0CommandCentre", position: [x, y], direction: 0x4000*gameRand(4), modules: 0, player: 1}
-//MAP-- `droids` is an array of droid data objects. Example:
-//MAP--    {name: "ConstructionDroid", position: [x, y], direction: gameRand(0x10000), player: 1}
-//MAP-- `features` is an array of feature data objects. Example:
-//MAP--    {name: "Tree1", position: [x, y], direction: gameRand(0x10000)}
-//MAP--
-static JSValue runMap_setMapData(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
-{
-	void* pOpaque = JS_GetContextOpaque(ctx);
-	if (!pOpaque)
-	{
-		return JS_ThrowInternalError(ctx, "Unable to acquire context information");
-	}
-	auto &data = *static_cast<ScriptMapData*>(pOpaque);
-	data.valid = false;
-	SCRIPT_ASSERT_AND_RETURNERROR(ctx, argc == 7, "Must have 7 parameters");
-	auto jsVal_mapWidth = argv[0];
-	auto jsVal_mapHeight = argv[1];
-	auto texture = argv[2];
-	auto height = argv[3];
-	auto structures = argv[4];
-	auto droids = argv[5];
-	auto features = argv[6];
-	SCRIPT_ASSERT_AND_RETURNERROR(ctx, JS_IsNumber(jsVal_mapWidth), "mapWidth must be number");
-	SCRIPT_ASSERT_AND_RETURNERROR(ctx, JS_IsNumber(jsVal_mapHeight), "mapHeight must be number");
-	SCRIPT_ASSERT_AND_RETURNERROR(ctx, JS_IsArray(ctx, texture), "texture must be array");
-	SCRIPT_ASSERT_AND_RETURNERROR(ctx, JS_IsArray(ctx, height), "height must be array");
-	SCRIPT_ASSERT_AND_RETURNERROR(ctx, JS_IsArray(ctx, structures), "structures must be array");
-	SCRIPT_ASSERT_AND_RETURNERROR(ctx, JS_IsArray(ctx, droids), "droids must be array");
-	SCRIPT_ASSERT_AND_RETURNERROR(ctx, JS_IsArray(ctx, features), "features must be array");
-	data.mapWidth = JSValueToInt32(ctx, jsVal_mapWidth);
-	data.mapHeight = JSValueToInt32(ctx, jsVal_mapHeight);
-	SCRIPT_ASSERT_AND_RETURNERROR(ctx, data.mapWidth > 1 && data.mapHeight > 1 && (uint64_t)data.mapWidth*data.mapHeight <= 65536, "Map size out of bounds");
-	size_t N = (size_t)data.mapWidth*data.mapHeight;
-	data.texture.resize(N);
-	data.height.resize(N);
-	uint64_t arrayLen = 0;
-	bool bGotArrayLength = QuickJS_GetArrayLength(ctx, texture, arrayLen);
-	SCRIPT_ASSERT_AND_RETURNERROR(ctx, bGotArrayLength && (arrayLen == ((uint64_t)data.mapWidth * (uint64_t)data.mapHeight)), "texture array length must equal (mapWidth * mapHeight); actual length is: %" PRIu64"", arrayLen);
-	bGotArrayLength = QuickJS_GetArrayLength(ctx, height, arrayLen);
-	SCRIPT_ASSERT_AND_RETURNERROR(ctx, bGotArrayLength && (arrayLen == ((uint64_t)data.mapWidth * (uint64_t)data.mapHeight)), "height array length must equal (mapWidth * mapHeight); actual length is: %" PRIu64"", arrayLen);
-	for (uint32_t n = 0; n < N; ++n)
-	{
-		JSValue textureVal = JS_GetPropertyUint32(ctx, texture, n);
-		auto free_texture_ref = gsl::finally([ctx, textureVal] { JS_FreeValue(ctx, textureVal); });
-		JSValue heightVal = JS_GetPropertyUint32(ctx, height, n);
-		auto free_height_ref = gsl::finally([ctx, heightVal] { JS_FreeValue(ctx, heightVal); });
-		uint32_t textureUint32 = JSValueToUint32(ctx, textureVal);
-		SCRIPT_ASSERT_AND_RETURNERROR(ctx, textureUint32 <= (uint32_t)std::numeric_limits<uint16_t>::max(), "texture value exceeds uint16::max: %" PRIu32 "", textureUint32);
-		data.texture[n] = static_cast<uint16_t>(textureUint32);
-		data.height[n] = JSValueToUint32(ctx, heightVal);
-	}
-	bGotArrayLength = QuickJS_GetArrayLength(ctx, structures, arrayLen);
-	SCRIPT_ASSERT_AND_RETURNERROR(ctx, bGotArrayLength && (arrayLen <= (uint64_t)std::numeric_limits<uint16_t>::max()), "structures array length be <= uint16::max; actual length is: %" PRIu64"", arrayLen);
-	uint16_t structureCount = static_cast<uint16_t>(arrayLen);
-	for (uint16_t i = 0; i < structureCount; ++i)
-	{
-		JSValue structure = JS_GetPropertyUint32(ctx, structures, i);
-		auto free_structure_ref = gsl::finally([ctx, structure] { JS_FreeValue(ctx, structure); });
-		ScriptMapData::Structure sd;
-		sd.name = WzString::fromUtf8(QuickJS_GetStdString(ctx, structure, "name"));
-		JSValue position = JS_GetPropertyStr(ctx, structure, "position");
-		auto free_position_ref = gsl::finally([ctx, position] { JS_FreeValue(ctx, position); });
-		if (JS_IsArray(ctx, position))
-		{
-			// [x, y]
-			bGotArrayLength = QuickJS_GetArrayLength(ctx, position, arrayLen);
-			SCRIPT_ASSERT_AND_RETURNERROR(ctx, bGotArrayLength && (arrayLen == 2), "position array length must equal 2; actual length is: %" PRIu64"", arrayLen);
-			JSValue xVal = JS_GetPropertyUint32(ctx, position, 0);
-			JSValue yVal = JS_GetPropertyUint32(ctx, position, 1);
-			sd.position = {JSValueToInt32(ctx, xVal), JSValueToInt32(ctx, yVal)};
-			JS_FreeValue(ctx, xVal);
-			JS_FreeValue(ctx, yVal);
-		}
-		sd.direction = QuickJS_GetInt32(ctx, structure, "direction");
-		sd.modules = QuickJS_GetUint32(ctx, structure, "modules");
-		sd.player = QuickJS_GetInt32(ctx, structure, "player");
-		SCRIPT_ASSERT_AND_RETURNERROR(ctx, sd.player >= 0 && sd.player < MAX_PLAYERS, "Invalid player (%d) for structure", (int)sd.player);
-		data.structures.push_back(std::move(sd));
-	}
-	bGotArrayLength = QuickJS_GetArrayLength(ctx, droids, arrayLen);
-	SCRIPT_ASSERT_AND_RETURNERROR(ctx, bGotArrayLength && (arrayLen <= (uint64_t)std::numeric_limits<uint16_t>::max()), "droids array length be <= uint16::max; actual length is: %" PRIu64"", arrayLen);
-	uint16_t droidCount = static_cast<uint16_t>(arrayLen);
-	for (uint16_t i = 0; i < droidCount; ++i)
-	{
-		JSValue droid = JS_GetPropertyUint32(ctx, droids, i);
-		auto free_droid_ref = gsl::finally([ctx, droid] { JS_FreeValue(ctx, droid); });
-		ScriptMapData::Droid sd;
-		sd.name = WzString::fromUtf8(QuickJS_GetStdString(ctx, droid, "name"));
-		JSValue position = JS_GetPropertyStr(ctx, droid, "position");
-		auto free_position_ref = gsl::finally([ctx, position] { JS_FreeValue(ctx, position); });
-		if (JS_IsArray(ctx, position))
-		{
-			// [x, y]
-			bGotArrayLength = QuickJS_GetArrayLength(ctx, position, arrayLen);
-			SCRIPT_ASSERT_AND_RETURNERROR(ctx, bGotArrayLength && (arrayLen == 2), "position array length must equal 2; actual length is: %" PRIu64"", arrayLen);
-			JSValue xVal = JS_GetPropertyUint32(ctx, position, 0);
-			JSValue yVal = JS_GetPropertyUint32(ctx, position, 1);
-			sd.position = {JSValueToInt32(ctx, xVal), JSValueToInt32(ctx, yVal)};
-			JS_FreeValue(ctx, xVal);
-			JS_FreeValue(ctx, yVal);
-		}
-		sd.direction = QuickJS_GetInt32(ctx, droid, "direction");
-		sd.player = QuickJS_GetInt32(ctx, droid, "player");
-		SCRIPT_ASSERT_AND_RETURNERROR(ctx, sd.player >= 0 && sd.player < MAX_PLAYERS, "Invalid player (%d) for droid", (int)sd.player);
-		data.droids.push_back(std::move(sd));
-	}
-	bGotArrayLength = QuickJS_GetArrayLength(ctx, features, arrayLen);
-	SCRIPT_ASSERT_AND_RETURNERROR(ctx, bGotArrayLength && (arrayLen <= (uint64_t)std::numeric_limits<uint16_t>::max()), "features array length be <= uint16::max; actual length is: %" PRIu64"", arrayLen);
-	uint16_t featureCount = static_cast<uint16_t>(arrayLen);
-	for (unsigned i = 0; i < featureCount; ++i)
-	{
-		JSValue feature = JS_GetPropertyUint32(ctx, features, i);
-		auto free_feature_ref = gsl::finally([ctx, feature] { JS_FreeValue(ctx, feature); });
-		ScriptMapData::Feature sd;
-		sd.name = WzString::fromUtf8(QuickJS_GetStdString(ctx, feature, "name"));
-		JSValue position = JS_GetPropertyStr(ctx, feature, "position");
-		auto free_position_ref = gsl::finally([ctx, position] { JS_FreeValue(ctx, position); });
-		if (JS_IsArray(ctx, position))
-		{
-			// [x, y]
-			bGotArrayLength = QuickJS_GetArrayLength(ctx, position, arrayLen);
-			SCRIPT_ASSERT_AND_RETURNERROR(ctx, bGotArrayLength && (arrayLen == 2), "position array length must equal 2; actual length is: %" PRIu64"", arrayLen);
-			JSValue xVal = JS_GetPropertyUint32(ctx, position, 0);
-			JSValue yVal = JS_GetPropertyUint32(ctx, position, 1);
-			sd.position = {JSValueToInt32(ctx, xVal), JSValueToInt32(ctx, yVal)};
-			JS_FreeValue(ctx, xVal);
-			JS_FreeValue(ctx, yVal);
-		}
-		sd.direction = QuickJS_GetInt32(ctx, feature, "direction");
-		data.features.push_back(std::move(sd));
-	}
-	data.valid = true;
-	return JS_TRUE;
-}
-
-struct MapScriptRuntimeInfo {
-	std::chrono::system_clock::time_point startTime;
-};
-
-#define MAX_MAPSCRIPT_RUNTIME_SECONDS 30
-
-/* return != 0 if the JS code needs to be interrupted */
-static int runMapScript_InterruptHandler(JSRuntime *rt, void *opaque)
-{
-	ASSERT(opaque, "Null opaque pointer?");
-	const MapScriptRuntimeInfo* pInfo = static_cast<const MapScriptRuntimeInfo*>(opaque);
-	auto secondsElapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - pInfo->startTime).count();
-	return (secondsElapsed >= MAX_MAPSCRIPT_RUNTIME_SECONDS);
-}
-
-ScriptMapData runMapScript_QuickJS(WzString const &path, uint64_t seed, bool preview)
-{
-	ScriptMapData data;
-	data.valid = false;
-	data.mt = MersenneTwister(seed);
-
-	JSRuntime *rt = JS_NewRuntime();
-	auto free_runtime_ref = gsl::finally([rt] { JS_FreeRuntime2(rt, QJSRuntimeFree_LeakHandler_Warning); });
-	JSLimitedContextOptions ctxOptions;
-	ctxOptions.baseObjects = true;
-	ctxOptions.dateObject = false;
-	ctxOptions.eval = true; // required for JS_Eval to work
-	ctxOptions.stringNormalize = false;
-	ctxOptions.regExp = false;
-	ctxOptions.json = false;
-	ctxOptions.proxy = false;
-	ctxOptions.mapSet = true;
-	ctxOptions.typedArrays = false;
-	ctxOptions.promise = false;
-	JSContext *ctx = JS_NewLimitedContext(rt, &ctxOptions);
-	auto free_context_ref = gsl::finally([ctx] { JS_FreeContext(ctx); });
-	JSValue global_obj = JS_GetGlobalObject(ctx);
-	auto free_globalobj_ref = gsl::finally([ctx, global_obj] { JS_FreeValue(ctx, global_obj); });
-
-	UDWORD size;
-	char *bytes = nullptr;
-	if (!loadFile(path.toUtf8().c_str(), &bytes, &size))
-	{
-		debug(LOG_ERROR, "Failed to read script file \"%s\"", path.toUtf8().c_str());
-		return data;
-	}
-	JSValue compiledScriptObj = JS_Eval(ctx, bytes, size, path.toUtf8().c_str(), JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
-	free(bytes);
-	if (JS_IsException(compiledScriptObj))
-	{
-		// compilation error / syntax error
-		std::string errorAsString = QuickJS_DumpError(ctx);
-		debug(LOG_ERROR, "Syntax / compilation error in %s: %s",
-			  path.toUtf8().c_str(), errorAsString.c_str());
-		JS_FreeValue(ctx, compiledScriptObj);
-		compiledScriptObj = JS_UNINITIALIZED;
-		return data;
-	}
-
-	JS_DefinePropertyValueStr(ctx, global_obj, "preview", JS_NewBool(ctx, preview), 0);
-	JS_DefinePropertyValueStr(ctx, global_obj, "XFLIP", JS_NewInt32(ctx, TILE_XFLIP), 0);
-	JS_DefinePropertyValueStr(ctx, global_obj, "YFLIP", JS_NewInt32(ctx, TILE_YFLIP), 0);
-	JS_DefinePropertyValueStr(ctx, global_obj, "ROTMASK", JS_NewInt32(ctx, TILE_ROTMASK), 0);
-	JS_DefinePropertyValueStr(ctx, global_obj, "ROTSHIFT", JS_NewInt32(ctx, TILE_ROTSHIFT), 0);
-	JS_DefinePropertyValueStr(ctx, global_obj, "TRIFLIP", JS_NewInt32(ctx, TILE_TRIFLIP), 0);
-	JS_SetContextOpaque(ctx, &data);
-
-	// Special mapScript functions
-	static const JSCFunctionListEntry js_builtin_mapFuncs[] = {
-		QJS_CFUNC_DEF("gameRand", 0, runMap_gameRand ),
-		QJS_CFUNC_DEF("log", 1, runMap_log ),
-		QJS_CFUNC_DEF("setMapData", 7, runMap_setMapData )
-	};
-	JS_SetPropertyFunctionList(ctx, global_obj, js_builtin_mapFuncs, sizeof(js_builtin_mapFuncs) / sizeof(js_builtin_mapFuncs[0]));
-
-	// configure limitations on runtime
-	JS_SetMaxStackSize(rt, 512*1024);
-	JS_SetMemoryLimit(rt, 100*1024*1024); // 100MiB better be enough...
-
-	// install interrupt handler to prevent endless script execution (due to bugs or otherwise)
-	MapScriptRuntimeInfo mapScriptRuntimeInfo;
-	mapScriptRuntimeInfo.startTime = std::chrono::system_clock::now();
-	JS_SetInterruptHandler(rt, runMapScript_InterruptHandler, &mapScriptRuntimeInfo);
-
-	// run the map script
-	JSValue result = JS_EvalFunction(ctx, compiledScriptObj);
-	compiledScriptObj = JS_UNINITIALIZED;
-	JS_SetInterruptHandler(rt, nullptr, nullptr);
-
-	if (JS_IsException(result))
-	{
-		// compilation error / syntax error / runtime error
-		std::string errorAsString = QuickJS_DumpError(ctx);
-		debug(LOG_ERROR, "Uncaught exception in %s: %s",
-			  path.toUtf8().c_str(), errorAsString.c_str());
-		JS_FreeValue(ctx, result);
-		data.valid = false;
-		return data;
-	}
-
-	JS_FreeValue(ctx, result);
-	return data;
 }
 
 wzapi::scripting_instance* createQuickJSScriptInstance(const WzString& path, int player, int difficulty)
@@ -2925,6 +2647,10 @@ bool quickjs_scripting_instance::loadScript(const WzString& path, int player, in
 	{
 		debug(LOG_ERROR, "Failed to read script file \"%s\"", path.toUtf8().c_str());
 		return false;
+	}
+	if (!isHostAI())
+	{
+		calcDataHash(reinterpret_cast<const uint8_t *>(bytes), size, DATA_SCRIPT);
 	}
 	m_path = path.toUtf8();
 	compiledScriptObj = JS_Eval(ctx, bytes, size, path.toUtf8().c_str(), JS_EVAL_TYPE_GLOBAL | JS_EVAL_FLAG_COMPILE_ONLY);
@@ -3072,8 +2798,8 @@ nlohmann::json quickjs_scripting_instance::debugGetAllScriptGlobals()
 	QuickJS_EnumerateObjectProperties(ctx, global_obj, [this, &globals](const char *key, JSAtom &atom) {
         JSValue jsVal = JS_GetProperty(ctx, global_obj, atom);
 		std::string nameStr = key;
-		if (((internalNamespace.count(nameStr) == 0 && !JS_IsFunction(ctx, jsVal)
-			/*&& !it.value().equals(engine->globalObject()*/))
+		if ((internalNamespace.count(nameStr) == 0 && !JS_IsFunction(ctx, jsVal)
+			/*&& !it.value().equals(engine->globalObject())*/)
 			|| nameStr == "Upgrades" || nameStr == "Stats")
 		{
 			globals[nameStr] = JSContextValue{ctx, jsVal, false}; // uses to_json JSContextValue implementation
@@ -3214,6 +2940,7 @@ IMPL_EVENT_HANDLER(eventDroidBuilt, const DROID *, optional<const STRUCTURE *>)
 IMPL_EVENT_HANDLER(eventStructureBuilt, const STRUCTURE *, optional<const DROID *>)
 IMPL_EVENT_HANDLER(eventStructureDemolish, const STRUCTURE *, optional<const DROID *>)
 IMPL_EVENT_HANDLER(eventStructureReady, const STRUCTURE *)
+IMPL_EVENT_HANDLER(eventStructureUpgradeStarted, const STRUCTURE *)
 IMPL_EVENT_HANDLER(eventAttacked, const BASE_OBJECT *, const BASE_OBJECT *)
 IMPL_EVENT_HANDLER(eventResearched, const wzapi::researchResult&, wzapi::event_nullable_ptr<const STRUCTURE>, int)
 IMPL_EVENT_HANDLER(eventDestroyed, const BASE_OBJECT *)
@@ -3353,7 +3080,7 @@ IMPL_JS_FUNC(setReticuleFlash, wzapi::setReticuleFlash)
 IMPL_JS_FUNC(showInterface, wzapi::showInterface)
 IMPL_JS_FUNC(hideInterface, wzapi::hideInterface)
 
-//-- ## removeReticuleButton(button type)
+//-- ## removeReticuleButton(buttonId)
 //--
 //-- Remove reticule button. DO NOT USE FOR ANYTHING.
 //--
@@ -3391,7 +3118,7 @@ IMPL_JS_FUNC(enumRange, wzapi::enumRange)
 IMPL_JS_FUNC(enumArea, scripting_engine::enumAreaJS)
 IMPL_JS_FUNC(addBeacon, wzapi::addBeacon)
 
-//-- ## removeBeacon(target player)
+//-- ## removeBeacon(playerFilter)
 //--
 //-- Remove a beacon message sent to target player. Target may also be ```ALLIES```.
 //-- Returns a boolean that is true on success. (3.2+ only)
@@ -3439,6 +3166,8 @@ IMPL_JS_FUNC(syncRequest, wzapi::syncRequest)
 IMPL_JS_FUNC(replaceTexture, wzapi::replaceTexture)
 IMPL_JS_FUNC(fireWeaponAtLoc, wzapi::fireWeaponAtLoc)
 IMPL_JS_FUNC(fireWeaponAtObj, wzapi::fireWeaponAtObj)
+IMPL_JS_FUNC(transformPlayerToSpectator, wzapi::transformPlayerToSpectator)
+IMPL_JS_FUNC(isSpectator, wzapi::isSpectator)
 IMPL_JS_FUNC(changePlayerColour, wzapi::changePlayerColour)
 IMPL_JS_FUNC(getMultiTechLevel, wzapi::getMultiTechLevel)
 IMPL_JS_FUNC(setCampaignNumber, wzapi::setCampaignNumber)
@@ -3738,6 +3467,8 @@ bool quickjs_scripting_instance::registerFunctions(const std::string& scriptName
 	JS_REGISTER_FUNC(setObjectFlag, 3); // WZAPI
 	JS_REGISTER_FUNC2(fireWeaponAtLoc, 3, 4); // WZAPI
 	JS_REGISTER_FUNC2(fireWeaponAtObj, 2, 3); // WZAPI
+	JS_REGISTER_FUNC(transformPlayerToSpectator, 1); // WZAPI
+	JS_REGISTER_FUNC(isSpectator, 1); // WZAPI
 
 	return true;
 }
@@ -3836,7 +3567,7 @@ void to_json(nlohmann::json& j, const JSContextValue& v) {
 		case JS_TAG_STRING:
 		{
 			const char* pStr = JS_ToCString(v.ctx, v.value);
-			j = json((pStr) ? pStr : "");
+			j = json(pStr ? pStr : "");
 			JS_FreeCString(v.ctx, pStr);
 			break;
 		}

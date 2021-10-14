@@ -93,6 +93,10 @@ public:
 	void highlight(W_CONTEXT *psContext) override;
 	void highlightLost() override;
 	void display(int xOffset, int yOffset) override;
+	std::string getTip() override
+	{
+		return pTip;
+	}
 
 	unsigned getState() override;
 	void setState(unsigned state) override;
@@ -106,12 +110,6 @@ public:
 	bool isHighlighted() const;
 
 	unsigned state;                     // Button state of the form
-
-protected:
-	virtual std::string getTip()
-	{
-		return pTip;
-	}
 
 private:
 	std::string pTip;                   // Tip for the form
@@ -131,10 +129,19 @@ public:
 	void display(int xOffset, int yOffset) override;
 	void run(W_CONTEXT *psContext) override;
 
+	void setCutoutWidget(std::shared_ptr<WIDGET> widget)
+	{
+		cutoutWidget = widget;
+	}
+
 public:
 	PIELIGHT backgroundColor = pal_RGBA(0, 0, 0, 125);
 	std::function<void ()> onClickedFunc;
 	std::function<void ()> onCancelPressed;
+private:
+	std::weak_ptr<WIDGET> cutoutWidget;
 };
+
+void displayChildDropShadows(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset);
 
 #endif // __INCLUDED_LIB_WIDGET_FORM_H__

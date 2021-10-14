@@ -24,6 +24,8 @@ void BuildController::updateBuildersList()
 {
 	builders.clear();
 
+	ASSERT_OR_RETURN(, selectedPlayer < MAX_PLAYERS, "selectedPlayer = %" PRIu32 "", selectedPlayer);
+
 	for (DROID *droid = apsDroidLists[selectedPlayer]; droid; droid = droid->psNext)
 	{
 		if (isConstructionDroid(droid) && droid->died == 0)
@@ -187,7 +189,13 @@ protected:
 		updateLayout();
 		auto droid = controller->getObjectAt(objectIndex);
 		ASSERT_NOT_NULLPTR_OR_RETURN(, droid);
-		ASSERT_OR_RETURN(, !isDead(droid), "Droid is dead");
+		if (isDead(droid))
+		{
+			ASSERT_FAILURE(!isDead(droid), "!isDead(droid)", AT_MACRO, __FUNCTION__, "Droid is dead");
+			// ensure the backing information is refreshed before the next draw
+			intRefreshScreen();
+			return;
+		}
 		displayIMD(Image(), ImdObject::Droid(droid), xOffset, yOffset);
 		displayIfHighlight(xOffset, yOffset);
 	}

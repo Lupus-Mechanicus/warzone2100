@@ -291,6 +291,11 @@ void pie_BoxFill(int x0, int y0, int x1, int y1, PIELIGHT colour)
 	pie_DrawRect<gfx_api::BoxFillPSO>(x0, y0, x1, y1, colour);
 }
 
+void pie_BoxFillf(float x0, float y0, float x1, float y1, PIELIGHT colour)
+{
+	pie_DrawRect<gfx_api::BoxFillPSO>(x0, y0, x1, y1, colour);
+}
+
 void pie_BoxFill_alpha(int x0, int y0, int x1, int y1, PIELIGHT colour)
 {
 	pie_DrawRect<gfx_api::BoxFillAlphaPSO>(x0, y0, x1, y1, colour);
@@ -314,6 +319,7 @@ void pie_UniTransBoxFill(float x0, float y0, float x1, float y1, PIELIGHT light)
 
 static bool assertValidImage(IMAGEFILE *imageFile, unsigned id)
 {
+	ASSERT_OR_RETURN(false, imageFile != nullptr, "Null imageFile (id: %u)", id);
 	ASSERT_OR_RETURN(false, id < imageFile->imageDefs.size(), "Out of range 1: %u/%d", id, (int)imageFile->imageDefs.size());
 	ASSERT_OR_RETURN(false, imageFile->imageDefs[id].TPageID < imageFile->pages.size(), "Out of range 2: %zu", imageFile->imageDefs[id].TPageID);
 	return true;
@@ -342,14 +348,14 @@ void iV_DrawImageAnisotropic(gfx_api::texture& TextureID, Vector2i Position, Vec
 	iv_DrawImageImpl<gfx_api::DrawImageAnisotropicPSO>(TextureID, offset, size, Vector2f(0.f, 0.f), Vector2f(1.f, 1.f), colour, mvp);
 }
 
-void iV_DrawImageText(gfx_api::texture& TextureID, Vector2i Position, Vector2f offset, Vector2f size, float angle, PIELIGHT colour)
+void iV_DrawImageText(gfx_api::texture& TextureID, Vector2f Position, Vector2f offset, Vector2f size, float angle, PIELIGHT colour)
 {
 	glm::mat4 mvp = defaultProjectionMatrix() * glm::translate(glm::vec3(Position.x, Position.y, 0)) * glm::rotate(RADIANS(angle), glm::vec3(0.f, 0.f, 1.f));
 
 	iv_DrawImageImpl<gfx_api::DrawImageTextPSO>(TextureID, offset, size, Vector2f(0.f, 0.f), Vector2f(1.f, 1.f), colour, mvp, SHADER_TEXT);
 }
 
-void iV_DrawImageTextClipped(gfx_api::texture& TextureID, Vector2i textureSize, Vector2i Position, Vector2f offset, Vector2f size, float angle, PIELIGHT colour, WzRect clippingRect)
+void iV_DrawImageTextClipped(gfx_api::texture& TextureID, Vector2i textureSize, Vector2f Position, Vector2f offset, Vector2f size, float angle, PIELIGHT colour, WzRect clippingRect)
 {
 	glm::mat4 mvp = defaultProjectionMatrix() * glm::translate(glm::vec3(Position.x, Position.y, 0)) * glm::rotate(RADIANS(angle), glm::vec3(0.f, 0.f, 1.f));
 
@@ -363,7 +369,8 @@ void iV_DrawImageTextClipped(gfx_api::texture& TextureID, Vector2i textureSize, 
 	iv_DrawImageImpl<gfx_api::DrawImageTextPSO>(TextureID, offset, size, Vector2f(tu, tv), Vector2f(su, sv), colour, mvp, SHADER_TEXT);
 }
 
-static void pie_DrawImage(IMAGEFILE *imageFile, int id, Vector2i size, const PIERECT *dest, PIELIGHT colour, const glm::mat4 &modelViewProjection, Vector2i textureInset = Vector2i(0, 0))
+template<typename PSO>
+static inline void pie_DrawImageTemplate(IMAGEFILE *imageFile, int id, Vector2i size, const PIERECT *dest, PIELIGHT colour, const glm::mat4 &modelViewProjection, Vector2i textureInset = Vector2i(0, 0))
 {
 	ImageDef const &image2 = imageFile->imageDefs[id];
 	size_t texPage = imageFile->pages[image2.TPageID].id;
@@ -375,7 +382,12 @@ static void pie_DrawImage(IMAGEFILE *imageFile, int id, Vector2i size, const PIE
 
 	glm::mat4 mvp = modelViewProjection * glm::translate(glm::vec3((float)dest->x, (float)dest->y, 0.f));
 
-	iv_DrawImageImpl<gfx_api::DrawImagePSO>(pie_Texture(texPage), Vector2i(0, 0), Vector2i(dest->w, dest->h), Vector2f(tu, tv), Vector2f(su, sv), colour, mvp);
+	iv_DrawImageImpl<PSO>(pie_Texture(texPage), Vector2i(0, 0), Vector2i(dest->w, dest->h), Vector2f(tu, tv), Vector2f(su, sv), colour, mvp);
+}
+
+static void pie_DrawImage(IMAGEFILE *imageFile, int id, Vector2i size, const PIERECT *dest, PIELIGHT colour, const glm::mat4 &modelViewProjection, Vector2i textureInset = Vector2i(0, 0))
+{
+	pie_DrawImageTemplate<gfx_api::DrawImagePSO>(imageFile, id, size, dest, colour, modelViewProjection, textureInset);
 }
 
 static void pie_DrawMultipleImages(const std::list<PieDrawImageRequest>& requests)
@@ -447,11 +459,17 @@ void iV_DrawImage2(const WzString &filename, float x, float y, float width, floa
 	if (filename.isEmpty()) { return; }
 	ImageDef *image = iV_GetImage(filename);
 	ASSERT_OR_RETURN(, image != nullptr, "No image found for filename: %s", filename.toUtf8().c_str());
+	iV_DrawImage2(image, x, y, width, height);
+}
+
+void iV_DrawImage2(const ImageDef *image, float x, float y, float width, float height)
+{
+	ASSERT_NOT_NULLPTR_OR_RETURN(, image);
 	const gfx_api::gfxFloat invTextureSize = image->invTextureSize;
 	const int tu = image->Tu;
 	const int tv = image->Tv;
-	const int w = width > 0 ? width : image->Width;
-	const int h = height > 0 ? height : image->Height;
+	const int w = width > 0 ? static_cast<int>(width) : static_cast<int>(image->Width);
+	const int h = height > 0 ? static_cast<int>(height) : static_cast<int>(image->Height);
 	x += image->XOffset;
 	y += image->YOffset;
 
@@ -462,7 +480,7 @@ void iV_DrawImage2(const WzString &filename, float x, float y, float width, floa
 		WZCOL_WHITE, mvp);
 }
 
-void iV_DrawImage(IMAGEFILE *ImageFile, UWORD ID, int x, int y, const glm::mat4 &modelViewProjection, BatchedImageDrawRequests* pBatchedRequests)
+void iV_DrawImage(IMAGEFILE *ImageFile, UWORD ID, int x, int y, const glm::mat4 &modelViewProjection, BatchedImageDrawRequests* pBatchedRequests, uint8_t alpha)
 {
 	if (!assertValidImage(ImageFile, ID))
 	{
@@ -475,13 +493,29 @@ void iV_DrawImage(IMAGEFILE *ImageFile, UWORD ID, int x, int y, const glm::mat4 
 	if (pBatchedRequests == nullptr)
 	{
 		gfx_api::DrawImagePSO::get().bind();
-		pie_DrawImage(ImageFile, ID, pieImage, &dest, WZCOL_WHITE, modelViewProjection);
+		pie_DrawImage(ImageFile, ID, pieImage, &dest, pal_RGBA(255, 255, 255, alpha), modelViewProjection);
 	}
 	else
 	{
-		pBatchedRequests->queuePieImageDraw(REND_ALPHA, ImageFile, ID, pieImage, dest, WZCOL_WHITE, modelViewProjection);
+		pBatchedRequests->queuePieImageDraw(REND_ALPHA, ImageFile, ID, pieImage, dest, pal_RGBA(255, 255, 255, alpha), modelViewProjection);
 		pBatchedRequests->draw(); // draw only if not deferred
 	}
+}
+
+void iV_DrawImageFileAnisotropic(IMAGEFILE *ImageFile, UWORD ID, int x, int y, Vector2f size, const glm::mat4 &modelViewProjection, uint8_t alpha)
+{
+	if (!assertValidImage(ImageFile, ID))
+	{
+		return;
+	}
+
+	PIERECT dest;
+	Vector2i pieImage = makePieImage(ImageFile, ID, &dest, x, y);
+	dest.w = size.x;
+	dest.h = size.y;
+
+	gfx_api::DrawImageAnisotropicPSO::get().bind();
+	pie_DrawImageTemplate<gfx_api::DrawImageAnisotropicPSO>(ImageFile, ID, pieImage, &dest, pal_RGBA(255, 255, 255, alpha), modelViewProjection);
 }
 
 void iV_DrawImageTc(Image image, Image imageTc, int x, int y, PIELIGHT colour, const glm::mat4 &modelViewProjection)

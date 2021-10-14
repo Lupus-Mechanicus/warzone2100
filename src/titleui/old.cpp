@@ -34,7 +34,6 @@
 #include "../frontend.h"
 #include "../hci.h"
 #include "../keyedit.h"
-#include "../keymap.h"
 #include "../mission.h"
 #include "../multiint.h"
 #include "../multilimit.h"
@@ -86,7 +85,7 @@ void WzOldTitleUI::start()
 		startMultiPlayerMenu();		// goto multiplayer menu
 		break;
 	case KEYMAP:
-		startKeyMapEditor(true);
+		startKeyMapEditor(gInputManager, gKeyFuncConfig, true);
 		break;
 	case MUSIC_MANAGER:
 		startMusicManager();
@@ -120,7 +119,7 @@ TITLECODE WzOldTitleUI::run()
 		runMultiPlayerMenu();
 		break;
 	case KEYMAP:
-		runKeyMapEditor();
+		runKeyMapEditor(gInputManager, gKeyFuncConfig);
 		break;
 
 	case MUSIC_MANAGER:

@@ -35,6 +35,8 @@
 #define  SEQUENCE_KILL 3//stop
 #define  SEQUENCE_HOLD 4//play once and hold last frame
 
+#define  SEQUENCE_MIN_SKIP_DELAY 75 //amount of loops before skipping is allowed
+
 enum SEQ_TEXT_POSITIONING
 {
 	/**
@@ -82,5 +84,7 @@ bool seq_GetSubtitles();
 
 /*returns the next sequence in the list to play*/
 void seq_StartNextFullScreenVideo();
+
+void seqReleaseAll();
 
 #endif	// __INCLUDED_SRC_SEQDISP_H__

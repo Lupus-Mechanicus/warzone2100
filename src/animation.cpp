@@ -86,7 +86,7 @@ int ValueTracker::getCurrent()
 	{
 		return this->target;
 	}
-	return this->current;
+	return static_cast<int>(this->current);
 }
 int ValueTracker::getCurrentDelta()
 {
@@ -94,7 +94,7 @@ int ValueTracker::getCurrentDelta()
 	{
 		return this->targetDelta;
 	}
-	return this->current - this->initial;
+	return static_cast<int>(this->current - this->initial);
 }
 int ValueTracker::getInitial()
 {
@@ -122,7 +122,7 @@ static uint16_t calculateEasing(EasingType easingType, uint16_t progress)
 	case EASE_IN_OUT:
 		return MAX(0, MIN(UINT16_MAX, iCos(UINT16_MAX / 2 + progress / 2) / 2 + (1 << 15)));
 	case EASE_IN:
-		return (progress * (uint32_t)progress) / (UINT16_MAX * (uint32_t)UINT16_MAX);
+		return (progress * (uint32_t)progress) / UINT16_MAX;
 	case EASE_OUT:
 		return 2 * progress - (progress * (uint32_t)progress) / (UINT16_MAX - 1);
 	}
@@ -174,13 +174,14 @@ const AnimatableData &Animation<AnimatableData>::getFinalData() const
 template <class AnimatableData>
 uint16_t Animation<AnimatableData>::getEasedProgress() const
 {
-	return calculateEasing(easingType, calculateEasing(easingType, progress));
+	return calculateEasing(easingType, progress);
 }
 
 template <class AnimatableData>
 Animation<AnimatableData> &Animation<AnimatableData>::setInitialData(AnimatableData initial)
 {
 	initialData = initial;
+	currentData = initial;
 	return *this;
 }
 
@@ -201,7 +202,7 @@ Animation<AnimatableData> &Animation<AnimatableData>::setEasing(EasingType easin
 template <class AnimatableData>
 Animation<AnimatableData> &Animation<AnimatableData>::setDuration(uint32_t durationMilliseconds)
 {
-	duration = durationMilliseconds * 0.001 * GAME_TICKS_PER_SEC;
+	duration = static_cast<uint32_t>(durationMilliseconds * 0.001 * GAME_TICKS_PER_SEC);
 	return *this;
 }
 
@@ -223,9 +224,9 @@ void RotationAnimation::start()
 {
 	finalData = Vector3f((uint16_t)finalData.x, (uint16_t)finalData.y, (uint16_t)finalData.z);
 	initialData = Vector3f(
-		calculateRelativeAngle(initialData.x, finalData.x),
-		calculateRelativeAngle(initialData.y, finalData.y),
-		calculateRelativeAngle(initialData.z, finalData.z)
+		calculateRelativeAngle(static_cast<uint16_t>(initialData.x), static_cast<uint16_t>(finalData.x)),
+		calculateRelativeAngle(static_cast<uint16_t>(initialData.y), static_cast<uint16_t>(finalData.y)),
+		calculateRelativeAngle(static_cast<uint16_t>(initialData.z), static_cast<uint16_t>(finalData.z))
 	);
 	Animation::start();
 }

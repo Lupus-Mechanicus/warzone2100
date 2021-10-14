@@ -29,6 +29,7 @@
 #include "tip.h"
 
 #include <algorithm>
+#include <sstream>
 
 #define LABEL_DEFAULT_CACHE_EXPIRY 250
 
@@ -58,13 +59,6 @@ int W_LABEL::setFormattedString(WzString string, uint32_t MaxWidth, iV_fonts fon
 	FontID = fontID;
 	aTextLines = iV_FormatText(string.toUtf8().c_str(), MaxWidth, FTEXT_LEFTJUSTIFY, fontID, ignoreNewlines);
 
-	int requiredHeight = 0;
-	if (!aTextLines.empty())
-	{
-		requiredHeight = aTextLines.back().offset.y + iV_GetTextLineSize(fontID);
-		requiredHeight += ((static_cast<int>(aTextLines.size()) - 1) * lineSpacing);
-	}
-
 	maxLineWidth = 0;
 	for (const auto& line : aTextLines)
 	{
@@ -77,7 +71,19 @@ int W_LABEL::setFormattedString(WzString string, uint32_t MaxWidth, iV_fonts fon
 		displayCache.wzText.push_back(WzCachedText(aTextLines[idx].text, FontID, LABEL_DEFAULT_CACHE_EXPIRY));
 	}
 
-	return requiredHeight;
+	return requiredHeight();
+}
+
+int W_LABEL::requiredHeight()
+{
+	if (aTextLines.empty())
+	{
+		return 0;
+	}
+
+	auto gapHeight = (static_cast<int>(aTextLines.size()) - 1) * lineSpacing;
+	auto textHeight = aTextLines.back().offset.y + iV_GetTextLineSize(FontID);
+	return textHeight + gapHeight;
 }
 
 #ifdef DEBUG_BOUNDING_BOXES
@@ -153,54 +159,35 @@ void W_LABEL::display(int xOffset, int yOffset)
 		if (lineWidthLimit > -1)
 		{
 			// Render ellipsis
-			iV_DrawEllipsis(FontID, Vector2i(textBoundingBoxOffset.x + fx + lineWidthLimit + 2, fy), fontColour);
+			iV_DrawEllipsis(FontID, Vector2f(textBoundingBoxOffset.x + fx + lineWidthLimit + 2, fy), fontColour);
 			isTruncated = true;
 		}
 		jy += wzTextLine->lineSize() + lineSpacing;
 	}
 }
 
-/* Respond to a mouse moving over a label */
-void W_LABEL::highlight(W_CONTEXT *psContext)
+std::string W_LABEL::getTip()
 {
-	/* If there is a tip string start the tool tip */
-	if (!pTip.empty() || isTruncated)
-	{
-		std::string tipString;
-		if (isTruncated)
-		{
-			for (const auto& line : aTextLines)
-			{
-				tipString += line.text + "\n";
-			}
-		}
-		if (!pTip.empty())
-		{
-			if (isTruncated)
-			{
-				tipString += "\n(";
-			}
-			tipString += pTip;
-			if (isTruncated)
-			{
-				tipString += ")";
-			}
-		}
-		if (auto lockedScreen = screenPointer.lock())
-		{
-			tipStart(this, tipString, lockedScreen->TipFontID, x() + psContext->xOffset, y() + psContext->yOffset, width(), height());
-		}
+	if (pTip.empty() && !isTruncated) {
+		return "";
 	}
-}
 
-
-/* Respond to the mouse moving off a label */
-void W_LABEL::highlightLost()
-{
-	if (!pTip.empty() || isTruncated)
-	{
-		tipStop(this);
+	if (!isTruncated) {
+		return pTip;
 	}
+
+	std::stringstream labelText;
+	for (const auto& line : aTextLines)
+	{
+		labelText << line.text << "\n";
+	}
+
+	if (!pTip.empty())
+	{
+		labelText << "\n(" << pTip << ")";
+	}
+
+	return labelText.str();
 }
 
 WzString W_LABEL::getString() const

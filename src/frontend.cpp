@@ -38,6 +38,11 @@
 #include "lib/widget/label.h"
 #include "lib/widget/slider.h"
 #include "lib/widget/dropdown.h"
+#include "lib/widget/gridlayout.h"
+#include "lib/widget/margin.h"
+#include "lib/widget/alignment.h"
+
+#include <limits>
 
 #include "advvis.h"
 #include "challenge.h"
@@ -82,12 +87,15 @@ char			aLevelName[MAX_LEVEL_NAME_SIZE + 1];	//256];			// vital! the wrf file to 
 bool			bLimiterLoaded = false;
 
 #define TUTORIAL_LEVEL "TUTORIAL3"
+#define TRANSLATION_URL "https://translate.wz2100.net"
 
 // ////////////////////////////////////////////////////////////////////////////
 // Forward definitions
 
 static W_BUTTON * addSmallTextButton(UDWORD id, UDWORD PosX, UDWORD PosY, const char *txt, unsigned int style);
-static std::shared_ptr<W_BUTTON> makeTextButton(UDWORD id,  UDWORD PosX, UDWORD PosY, const std::string &txt, unsigned int style);
+static std::shared_ptr<W_BUTTON> makeTextButton(UDWORD id, const std::string &txt, unsigned int style);
+static std::shared_ptr<W_SLIDER> makeFESlider(UDWORD id, UDWORD parent, UDWORD stops, UDWORD pos);
+static std::shared_ptr<WIDGET> addMargin(std::shared_ptr<WIDGET> widget);
 
 // ////////////////////////////////////////////////////////////////////////////
 // Helper functions
@@ -209,9 +217,9 @@ static void runchatlink()
 void runContinue()
 {
 	SPinit(lastSaveMP ? LEVEL_TYPE::SKIRMISH : LEVEL_TYPE::CAMPAIGN);
-	sstrcpy(saveGameName, lastSavePath);
+	sstrcpy(saveGameName, lastSavePath.toPath(SaveGamePath_t::Extension::GAM).c_str());
 	bMultiPlayer = lastSaveMP;
-	setCampaignNumber(getCampaign(lastSavePath));
+	setCampaignNumber(getCampaign(saveGameName));
 }
 
 bool runTitleMenu()
@@ -335,6 +343,7 @@ void startSinglePlayerMenu()
 	addTextButton(FRONTEND_CHALLENGES, FRONTEND_POS4X, FRONTEND_POS4Y, _("Challenges"), WBUT_TXTCENTRE);
 	addTextButton(FRONTEND_LOADGAME_MISSION, FRONTEND_POS5X, FRONTEND_POS5Y, _("Load Campaign Game"), WBUT_TXTCENTRE);
 	addTextButton(FRONTEND_LOADGAME_SKIRMISH, FRONTEND_POS6X, FRONTEND_POS6Y, _("Load Skirmish Game"), WBUT_TXTCENTRE);
+	addTextButton(FRONTEND_REPLAY, FRONTEND_POS7X,FRONTEND_POS7Y, _("View Skirmish Replay"), WBUT_TXTCENTRE);
 
 	addSideText(FRONTEND_SIDETEXT, FRONTEND_SIDEX, FRONTEND_SIDEY, _("SINGLE PLAYER"));
 	addMultiBut(psWScreen, FRONTEND_BOTFORM, FRONTEND_QUIT, 10, 10, 30, 29, P_("menu", "Return"), IMAGE_RETURN, IMAGE_RETURN_HI, IMAGE_RETURN_HI);
@@ -504,6 +513,12 @@ bool runSinglePlayerMenu()
 			addLoadSave(LOAD_FRONTEND_SKIRMISH, _("Load Skirmish Saved Game"));	// change mode when loadsave returns
 			break;
 
+		case FRONTEND_REPLAY:
+			SPinit(LEVEL_TYPE::SKIRMISH);
+			bMultiPlayer = true;
+			addLoadSave(LOADREPLAY_FRONTEND_SKIRMISH, _("Load Skirmish Replay"));  // change mode when loadsave returns
+			break;
+
 		case FRONTEND_SKIRMISH:
 			SPinit(LEVEL_TYPE::SKIRMISH);
 			sstrcpy(game.map, DEFAULTSKIRMISHMAP);
@@ -566,6 +581,7 @@ void startMultiPlayerMenu()
 
 	addTextButton(FRONTEND_HOST,     FRONTEND_POS2X, FRONTEND_POS2Y, _("Host Game"), WBUT_TXTCENTRE);
 	addTextButton(FRONTEND_JOIN,     FRONTEND_POS3X, FRONTEND_POS3Y, _("Join Game"), WBUT_TXTCENTRE);
+	addTextButton(FRONTEND_REPLAY,   FRONTEND_POS7X, FRONTEND_POS7Y, _("View Replay"), WBUT_TXTCENTRE);
 
 	addMultiBut(psWScreen, FRONTEND_BOTFORM, FRONTEND_QUIT, 10, 10, 30, 29, P_("menu", "Return"), IMAGE_RETURN, IMAGE_RETURN_HI, IMAGE_RETURN_HI);
 
@@ -575,46 +591,69 @@ void startMultiPlayerMenu()
 
 bool runMultiPlayerMenu()
 {
-	WidgetTriggers const &triggers = widgRunScreen(psWScreen);
-	unsigned id = triggers.empty() ? 0 : triggers.front().widget->id; // Just use first click here, since the next click could be on another menu.
-
-	switch (id)
+	if (bLoadSaveUp)
 	{
-	case FRONTEND_HOST:
-		// don't pretend we are running a network game. Really do it!
-		NetPlay.bComms = true; // use network = true
-		NetPlay.isUPNP_CONFIGURED = false;
-		NetPlay.isUPNP_ERROR = false;
-		ingame.side = InGameSide::HOST_OR_SINGLEPLAYER;
-		bMultiPlayer = true;
-		bMultiMessages = true;
-		NETinit(true);
-		NETdiscoverUPnPDevices();
-		game.type = LEVEL_TYPE::SKIRMISH;		// needed?
-		changeTitleUI(std::make_shared<WzMultiplayerOptionsTitleUI>(wzTitleUICurrent));
-		break;
-	case FRONTEND_JOIN:
-		NETinit(true);
-		ingame.side = InGameSide::MULTIPLAYER_CLIENT;
-		if (getLobbyError() != ERROR_INVALID)
+		if (runLoadSave(false)) // check for file name.
 		{
-			setLobbyError(ERROR_NOERROR);
+			loadOK();
 		}
-		changeTitleUI(std::make_shared<WzProtocolTitleUI>());
-		break;
+	}
+	else
+	{
+		WidgetTriggers const &triggers = widgRunScreen(psWScreen);
+		unsigned id = triggers.empty() ? 0 : triggers.front().widget->id; // Just use first click here, since the next click could be on another menu.
 
-	case FRONTEND_QUIT:
-		changeTitleMode(TITLE);
-		break;
-	default:
-		break;
+		switch (id)
+		{
+		case FRONTEND_HOST:
+			// don't pretend we are running a network game. Really do it!
+			NetPlay.bComms = true; // use network = true
+			NetPlay.isUPNP_CONFIGURED = false;
+			NetPlay.isUPNP_ERROR = false;
+			ingame.side = InGameSide::HOST_OR_SINGLEPLAYER;
+			bMultiPlayer = true;
+			bMultiMessages = true;
+			NETinit(true);
+			NETdiscoverUPnPDevices();
+			game.type = LEVEL_TYPE::SKIRMISH;		// needed?
+			changeTitleUI(std::make_shared<WzMultiplayerOptionsTitleUI>(wzTitleUICurrent));
+			break;
+		case FRONTEND_JOIN:
+			NETinit(true);
+			ingame.side = InGameSide::MULTIPLAYER_CLIENT;
+			if (getLobbyError() != ERROR_INVALID)
+			{
+				setLobbyError(ERROR_NOERROR);
+			}
+			changeTitleUI(std::make_shared<WzProtocolTitleUI>());
+			break;
+		case FRONTEND_REPLAY:
+			SPinit(LEVEL_TYPE::SKIRMISH);
+			bMultiPlayer = true;
+			game.maxPlayers = DEFAULTSKIRMISHMAPMAXPLAYERS;
+			addLoadSave(LOADREPLAY_FRONTEND_MULTI, _("Load Multiplayer Replay"));  // change mode when loadsave returns
+			break;
+
+		case FRONTEND_QUIT:
+			changeTitleMode(TITLE);
+			break;
+		default:
+			break;
+		}
+
+		if (CancelPressed())
+		{
+			changeTitleMode(TITLE);
+		}
 	}
 
-	widgDisplayScreen(psWScreen); // show the widgets currently running
-
-	if (CancelPressed())
+	if (!bLoadSaveUp)
 	{
-		changeTitleMode(TITLE);
+		widgDisplayScreen(psWScreen);		// show the widgets currently running
+	}
+	else if (bLoadSaveUp)					// if save/load screen is up
+	{
+		displayLoadSave();
 	}
 
 	return true;
@@ -742,6 +781,11 @@ char const *graphicsOptionsShadowsString()
 	return getDrawShadows() ? _("On") : _("Off");
 }
 
+char const *graphicsOptionsFogString()
+{
+	return pie_GetFogEnabled() ? _("On") : _("Off");
+}
+
 char const *graphicsOptionsRadarString()
 {
 	return rotateRadar ? _("Rotating") : _("Fixed");
@@ -760,36 +804,54 @@ void startGraphicsOptionsMenu()
 	addTopForm(false);
 	addBottomForm();
 
+	WIDGET *parent = widgGetFromID(psWScreen, FRONTEND_BOTFORM);
+
+	auto grid = std::make_shared<GridLayout>();
+	grid_allocation::slot row(0);
+
 	////////////
 	//FMV mode.
-	addTextButton(FRONTEND_FMVMODE,   FRONTEND_POS2X - 35, FRONTEND_POS2Y, _("Video Playback"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_FMVMODE_R, FRONTEND_POS2M - 55, FRONTEND_POS2Y, graphicsOptionsFmvmodeString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_FMVMODE, _("Video Playback"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_FMVMODE_R, graphicsOptionsFmvmodeString(), WBUT_SECONDARY)));
+	row.start++;
 
 	// Scanlines
-	addTextButton(FRONTEND_SCANLINES,   FRONTEND_POS3X - 35, FRONTEND_POS3Y, _("Scanlines"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_SCANLINES_R, FRONTEND_POS3M - 55, FRONTEND_POS3Y, graphicsOptionsScanlinesString(), WBUT_SECONDARY);
-
-	////////////
-	//subtitle mode.
-	addTextButton(FRONTEND_SUBTITLES,   FRONTEND_POS4X - 35, FRONTEND_POS4Y, _("Subtitles"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_SUBTITLES_R, FRONTEND_POS4M - 55, FRONTEND_POS4Y, graphicsOptionsSubtitlesString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_SCANLINES, _("Scanlines"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_SCANLINES_R, graphicsOptionsScanlinesString(), WBUT_SECONDARY)));
+	row.start++;
 
 	////////////
 	//shadows
-	addTextButton(FRONTEND_SHADOWS,   FRONTEND_POS5X - 35, FRONTEND_POS5Y, _("Shadows"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_SHADOWS_R, FRONTEND_POS5M - 55, FRONTEND_POS5Y, graphicsOptionsShadowsString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_SHADOWS, _("Shadows"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_SHADOWS_R, graphicsOptionsShadowsString(), WBUT_SECONDARY)));
+	row.start++;
+
+	// fog
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_FOG, _("Fog"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_FOG_R, graphicsOptionsFogString(), WBUT_SECONDARY)));
+	row.start++;
 
 	// Radar
-	addTextButton(FRONTEND_RADAR,   FRONTEND_POS6X - 35, FRONTEND_POS6Y, _("Radar"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_RADAR_R, FRONTEND_POS6M - 55, FRONTEND_POS6Y, graphicsOptionsRadarString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_RADAR, _("Radar"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_RADAR_R, graphicsOptionsRadarString(), WBUT_SECONDARY)));
+	row.start++;
 
 	// RadarJump
-	addTextButton(FRONTEND_RADAR_JUMP,   FRONTEND_POS7X - 35, FRONTEND_POS7Y, _("Radar Jump"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_RADAR_JUMP_R, FRONTEND_POS7M - 55, FRONTEND_POS7Y, graphicsOptionsRadarJumpString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_RADAR_JUMP, _("Radar Jump"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_RADAR_JUMP_R, graphicsOptionsRadarJumpString(), WBUT_SECONDARY)));
+	row.start++;
 
 	// screenshake
-	addTextButton(FRONTEND_SSHAKE,   FRONTEND_POS8X - 35, FRONTEND_POS8Y, _("Screen Shake"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_SSHAKE_R, FRONTEND_POS8M - 55, FRONTEND_POS8Y, graphicsOptionsScreenShakeString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_SSHAKE, _("Screen Shake"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_SSHAKE_R, graphicsOptionsScreenShakeString(), WBUT_SECONDARY)));
+	row.start++;
+
+	grid->setGeometry(0, 0, FRONTEND_BUTWIDTH, grid->idealHeight());
+
+	auto scrollableList = ScrollableListWidget::make();
+	scrollableList->setGeometry(0, FRONTEND_POS2Y, FRONTEND_BOTFORMW - 1, FRONTEND_BOTFORMH - FRONTEND_POS2Y - 1);
+	scrollableList->addItem(grid);
+	parent->attach(scrollableList);
 
 	// Add some text down the side of the form
 	addSideText(FRONTEND_SIDETEXT, FRONTEND_SIDEX, FRONTEND_SIDEY, _("GRAPHICS OPTIONS"));
@@ -820,16 +882,24 @@ bool runGraphicsOptionsMenu()
 		changeTitleMode(OPTIONS);
 		break;
 
-	case FRONTEND_SUBTITLES:
-	case FRONTEND_SUBTITLES_R:
-		seq_SetSubtitles(!seq_GetSubtitles());
-		widgSetString(psWScreen, FRONTEND_SUBTITLES_R, graphicsOptionsSubtitlesString());
-		break;
-
 	case FRONTEND_SHADOWS:
 	case FRONTEND_SHADOWS_R:
 		setDrawShadows(!getDrawShadows());
 		widgSetString(psWScreen, FRONTEND_SHADOWS_R, graphicsOptionsShadowsString());
+		break;
+
+	case FRONTEND_FOG:
+	case FRONTEND_FOG_R:
+		if (pie_GetFogEnabled())
+		{
+			pie_SetFogStatus(false);
+			pie_EnableFog(false);
+		}
+		else
+		{
+			pie_EnableFog(true);
+		}
+		widgSetString(psWScreen, FRONTEND_FOG_R, graphicsOptionsFogString());
 		break;
 
 	case FRONTEND_FMVMODE:
@@ -939,21 +1009,41 @@ void startAudioAndZoomOptionsMenu()
 	addTopForm(false);
 	addBottomForm();
 
+	WIDGET *parent = widgGetFromID(psWScreen, FRONTEND_BOTFORM);
+
+	auto addSliderWrap = [](std::shared_ptr<WIDGET> widget) {
+		Alignment sliderAlignment(Alignment::Vertical::Center, Alignment::Horizontal::Left);
+		return sliderAlignment.wrap(addMargin(widget));
+	};
+
+	auto grid = std::make_shared<GridLayout>();
+	grid_allocation::slot row(0);
+
 	// 2d audio
-	addTextButton(FRONTEND_FX, FRONTEND_POS2X - 35, FRONTEND_POS2Y, _("Voice Volume"), 0);
-	addFESlider(FRONTEND_FX_SL, FRONTEND_BOTFORM, FRONTEND_POS2M -20, FRONTEND_POS2Y + 5, AUDIO_VOL_MAX, sound_GetUIVolume() * 100.0);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_FX, _("Voice Volume"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addSliderWrap(makeFESlider(FRONTEND_FX_SL, FRONTEND_BOTFORM, AUDIO_VOL_MAX, static_cast<UDWORD>(sound_GetUIVolume() * 100.0f))));
+	row.start++;
 
 	// 3d audio
-	addTextButton(FRONTEND_3D_FX, FRONTEND_POS3X - 35, FRONTEND_POS3Y, _("FX Volume"), 0);
-	addFESlider(FRONTEND_3D_FX_SL, FRONTEND_BOTFORM, FRONTEND_POS3M -20, FRONTEND_POS3Y + 5, AUDIO_VOL_MAX, sound_GetEffectsVolume() * 100.0);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_3D_FX, _("FX Volume"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addSliderWrap(makeFESlider(FRONTEND_3D_FX_SL, FRONTEND_BOTFORM, AUDIO_VOL_MAX, static_cast<UDWORD>(sound_GetEffectsVolume() * 100.0f))));
+	row.start++;
 
 	// cd audio
-	addTextButton(FRONTEND_MUSIC, FRONTEND_POS4X - 35, FRONTEND_POS4Y, _("Music Volume"), 0);
-	addFESlider(FRONTEND_MUSIC_SL, FRONTEND_BOTFORM, FRONTEND_POS4M -20, FRONTEND_POS4Y + 5, AUDIO_VOL_MAX, sound_GetMusicVolume() * 100.0);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_MUSIC, _("Music Volume"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addSliderWrap(makeFESlider(FRONTEND_MUSIC_SL, FRONTEND_BOTFORM, AUDIO_VOL_MAX, static_cast<UDWORD>(sound_GetMusicVolume() * 100.0f))));
+	row.start++;
+
+	////////////
+	//subtitle mode.
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_SUBTITLES, _("Subtitles"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_SUBTITLES_R, graphicsOptionsSubtitlesString(), WBUT_SECONDARY)));
+	row.start++;
 
 	// HRTF
-	addTextButton(FRONTEND_SOUND_HRTF, FRONTEND_POS5X - 35, FRONTEND_POS5Y, _("HRTF"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_SOUND_HRTF_R, FRONTEND_POS5M - 55, FRONTEND_POS5Y, audioAndZoomOptionsSoundHRTFMode(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_SOUND_HRTF, _("HRTF"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_SOUND_HRTF_R, audioAndZoomOptionsSoundHRTFMode(), WBUT_SECONDARY)));
+	row.start++;
 	if (sound_GetHRTFMode() == HRTFMode::Unsupported)
 	{
 		widgSetButtonState(psWScreen, FRONTEND_SOUND_HRTF, WBUT_DISABLE);
@@ -963,16 +1053,26 @@ void startAudioAndZoomOptionsMenu()
 	}
 
 	// map zoom
-	addTextButton(FRONTEND_MAP_ZOOM, FRONTEND_POS6X - 35, FRONTEND_POS6Y, _("Map Zoom"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_MAP_ZOOM_R, FRONTEND_POS6M - 55, FRONTEND_POS6Y, audioAndZoomOptionsMapZoomString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_MAP_ZOOM, _("Map Zoom"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_MAP_ZOOM_R, audioAndZoomOptionsMapZoomString(), WBUT_SECONDARY)));
+	row.start++;
 
 	// map zoom rate
-	addTextButton(FRONTEND_MAP_ZOOM_RATE, FRONTEND_POS7X - 35, FRONTEND_POS7Y, _("Map Zoom Rate"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_MAP_ZOOM_RATE_R, FRONTEND_POS7M - 55, FRONTEND_POS7Y, audioAndZoomOptionsMapZoomRateString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_MAP_ZOOM_RATE, _("Map Zoom Rate"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_MAP_ZOOM_RATE_R, audioAndZoomOptionsMapZoomRateString(), WBUT_SECONDARY)));
+	row.start++;
 
 	// radar zoom
-	addTextButton(FRONTEND_RADAR_ZOOM, FRONTEND_POS8X - 35, FRONTEND_POS8Y, _("Radar Zoom"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_RADAR_ZOOM_R, FRONTEND_POS8M - 55, FRONTEND_POS8Y, audioAndZoomOptionsRadarZoomString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_RADAR_ZOOM, _("Radar Zoom"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_RADAR_ZOOM_R, audioAndZoomOptionsRadarZoomString(), WBUT_SECONDARY)));
+	row.start++;
+
+	grid->setGeometry(0, 0, FRONTEND_BUTWIDTH, grid->idealHeight());
+
+	auto scrollableList = ScrollableListWidget::make();
+	scrollableList->setGeometry(0, FRONTEND_POS2Y, FRONTEND_BOTFORMW - 1, FRONTEND_BOTFORMH - FRONTEND_POS2Y - 1);
+	scrollableList->addItem(grid);
+	parent->attach(scrollableList);
 
 	// quit.
 	addMultiBut(psWScreen, FRONTEND_BOTFORM, FRONTEND_QUIT, 10, 10, 30, 29, P_("menu", "Return"), IMAGE_RETURN, IMAGE_RETURN_HI, IMAGE_RETURN_HI);
@@ -1007,15 +1107,21 @@ bool runAudioAndZoomOptionsMenu()
 		break;
 
 	case FRONTEND_FX_SL:
-		sound_SetUIVolume((float)widgGetSliderPos(psWScreen, FRONTEND_FX_SL) / 100.0);
+		sound_SetUIVolume((float)widgGetSliderPos(psWScreen, FRONTEND_FX_SL) / 100.0f);
 		break;
 
 	case FRONTEND_3D_FX_SL:
-		sound_SetEffectsVolume((float)widgGetSliderPos(psWScreen, FRONTEND_3D_FX_SL) / 100.0);
+		sound_SetEffectsVolume((float)widgGetSliderPos(psWScreen, FRONTEND_3D_FX_SL) / 100.0f);
 		break;
 
 	case FRONTEND_MUSIC_SL:
-		sound_SetMusicVolume((float)widgGetSliderPos(psWScreen, FRONTEND_MUSIC_SL) / 100.0);
+		sound_SetMusicVolume((float)widgGetSliderPos(psWScreen, FRONTEND_MUSIC_SL) / 100.0f);
+		break;
+
+	case FRONTEND_SUBTITLES:
+	case FRONTEND_SUBTITLES_R:
+		seq_SetSubtitles(!seq_GetSubtitles());
+		widgSetString(psWScreen, FRONTEND_SUBTITLES_R, graphicsOptionsSubtitlesString());
 		break;
 
 	case FRONTEND_SOUND_HRTF:
@@ -1098,20 +1204,20 @@ static char const *videoOptionsResolutionGetReadOnlyTooltip()
 
 static void videoOptionsDisableResolutionButtons()
 {
-	widgReveal(psWScreen, FRONTEND_RESOLUTION_READONLY_LABEL);
-	widgReveal(psWScreen, FRONTEND_RESOLUTION_READONLY);
+	widgReveal(psWScreen, FRONTEND_RESOLUTION_READONLY_LABEL_CONTAINER);
+	widgReveal(psWScreen, FRONTEND_RESOLUTION_READONLY_CONTAINER);
 	auto readonlyResolutionTooltip = videoOptionsResolutionGetReadOnlyTooltip();
 	widgSetTip(psWScreen, FRONTEND_RESOLUTION_READONLY_LABEL, readonlyResolutionTooltip);
 	widgSetTip(psWScreen, FRONTEND_RESOLUTION_READONLY, readonlyResolutionTooltip);
-	widgHide(psWScreen, FRONTEND_RESOLUTION_DROPDOWN_LABEL);
+	widgHide(psWScreen, FRONTEND_RESOLUTION_DROPDOWN_LABEL_CONTAINER);
 	widgHide(psWScreen, FRONTEND_RESOLUTION_DROPDOWN);
 }
 
 static void videoOptionsEnableResolutionButtons()
 {
-	widgHide(psWScreen, FRONTEND_RESOLUTION_READONLY_LABEL);
-	widgHide(psWScreen, FRONTEND_RESOLUTION_READONLY);
-	widgReveal(psWScreen, FRONTEND_RESOLUTION_DROPDOWN_LABEL);
+	widgHide(psWScreen, FRONTEND_RESOLUTION_READONLY_LABEL_CONTAINER);
+	widgHide(psWScreen, FRONTEND_RESOLUTION_READONLY_CONTAINER);
+	widgReveal(psWScreen, FRONTEND_RESOLUTION_DROPDOWN_LABEL_CONTAINER);
 	widgReveal(psWScreen, FRONTEND_RESOLUTION_DROPDOWN);
 }
 
@@ -1349,20 +1455,18 @@ void refreshCurrentVideoOptionsValues()
 	}
 }
 
-static void addResolutionDropdown()
+static std::shared_ptr<WIDGET> makeResolutionDropdown()
 {
 	auto dropdown = std::make_shared<DropdownWidget>();
 	dropdown->id = FRONTEND_RESOLUTION_DROPDOWN;
-	uint32_t dropdownLeftPadding = 10;
-	auto dropdownX = FRONTEND_POS3M - 20 - dropdownLeftPadding;
-	dropdown->setGeometry(dropdownX, FRONTEND_POS3Y, FRONTEND_BOTFORMW - dropdownX - FRONTEND_POS3X, FRONTEND_BUTHEIGHT);
 	dropdown->setListHeight(FRONTEND_BUTHEIGHT * 5);
-	dropdown->setItemPadding({ 0, 0, 0, dropdownLeftPadding });
+	const auto paddingSize = 10;
 
 	ScreenResolutionsModel screenResolutionsModel;
 	for (auto resolution: screenResolutionsModel)
 	{
-		dropdown->addItem(makeTextButton(0, 0, 0, ScreenResolutionsModel::resolutionString(resolution), 0));
+		auto item = makeTextButton(0, ScreenResolutionsModel::resolutionString(resolution), 0);
+		dropdown->addItem(Margin(0, paddingSize).wrap(item));
 	}
 
 	auto closestResolution = screenResolutionsModel.findResolutionClosestToCurrent();
@@ -1378,7 +1482,7 @@ static void addResolutionDropdown()
 		}
 	});
 
-	widgGetFromID(psWScreen, FRONTEND_BOTFORM)->attach(dropdown);
+	return Margin(0, -paddingSize).wrap(dropdown);
 }
 
 void startVideoOptionsMenu()
@@ -1397,30 +1501,49 @@ void startVideoOptionsMenu()
 	label->setString(_("* Takes effect on game restart"));
 	label->setTextAlignment(WLAB_ALIGNBOTTOMLEFT);
 
+	auto grid = std::make_shared<GridLayout>();
+	grid_allocation::slot row(0);
+
 	// Fullscreen/windowed
-	addTextButton(FRONTEND_WINDOWMODE, FRONTEND_POS2X - 35, FRONTEND_POS2Y, videoOptionsWindowModeLabel(), WBUT_SECONDARY);
-	addTextButton(FRONTEND_WINDOWMODE_R, FRONTEND_POS2M - 55, FRONTEND_POS2Y, videoOptionsWindowModeString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_WINDOWMODE, videoOptionsWindowModeLabel(), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_WINDOWMODE_R, videoOptionsWindowModeString(), WBUT_SECONDARY)));
+	row.start++;
 
 	// Resolution
-	addTextButton(FRONTEND_RESOLUTION_READONLY_LABEL, FRONTEND_POS3X - 35, FRONTEND_POS3Y, videoOptionsResolutionLabel(), WBUT_SECONDARY | WBUT_DISABLE);
-	addTextButton(FRONTEND_RESOLUTION_READONLY, FRONTEND_POS3M - 55, FRONTEND_POS3Y, ScreenResolutionsModel::currentResolutionString(), WBUT_SECONDARY | WBUT_DISABLE);
-	auto readonlyResolutionTooltip = videoOptionsResolutionGetReadOnlyTooltip();
-	widgSetTip(psWScreen, FRONTEND_RESOLUTION_READONLY_LABEL, readonlyResolutionTooltip);
-	widgSetTip(psWScreen, FRONTEND_RESOLUTION_READONLY, readonlyResolutionTooltip);
-	addTextButton(FRONTEND_RESOLUTION_DROPDOWN_LABEL, FRONTEND_POS3X - 35, FRONTEND_POS3Y, videoOptionsResolutionLabel(), WBUT_SECONDARY);
-	addResolutionDropdown();
+	auto resolutionReadonlyLabel = makeTextButton(FRONTEND_RESOLUTION_READONLY_LABEL, videoOptionsResolutionLabel(), WBUT_SECONDARY | WBUT_DISABLE);
+	resolutionReadonlyLabel->setTip(videoOptionsResolutionGetReadOnlyTooltip());
+	auto resolutionReadonlyLabelContainer = addMargin(resolutionReadonlyLabel);
+	resolutionReadonlyLabelContainer->id = FRONTEND_RESOLUTION_READONLY_LABEL_CONTAINER;
+
+	auto resolutionReadonlyValue = makeTextButton(FRONTEND_RESOLUTION_READONLY, ScreenResolutionsModel::currentResolutionString(), WBUT_SECONDARY | WBUT_DISABLE);
+	resolutionReadonlyValue->setTip(videoOptionsResolutionGetReadOnlyTooltip());
+	auto resolutionReadonlyValueContainer = addMargin(resolutionReadonlyValue);
+	resolutionReadonlyValueContainer->id = FRONTEND_RESOLUTION_READONLY_CONTAINER;
+
+	grid->place({0}, row, resolutionReadonlyLabelContainer);
+	grid->place({1, 1, false}, row, resolutionReadonlyValueContainer);
+
+	auto resolutionDropdownLabel = makeTextButton(FRONTEND_RESOLUTION_DROPDOWN_LABEL, videoOptionsResolutionLabel(), WBUT_SECONDARY);
+	auto resolutionDropdownLabelContainer = addMargin(resolutionDropdownLabel);
+	resolutionDropdownLabelContainer->id = FRONTEND_RESOLUTION_DROPDOWN_LABEL_CONTAINER;
+	grid->place({0}, row, resolutionDropdownLabelContainer);
+	grid->place({1, 1, false}, row, addMargin(makeResolutionDropdown()));
+	row.start++;
 
 	// Texture size
-	addTextButton(FRONTEND_TEXTURESZ, FRONTEND_POS4X - 35, FRONTEND_POS4Y, _("Texture size"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_TEXTURESZ_R, FRONTEND_POS4M - 55, FRONTEND_POS4Y, videoOptionsTextureSizeString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_TEXTURESZ, _("Texture size"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_TEXTURESZ_R, videoOptionsTextureSizeString(), WBUT_SECONDARY)));
+	row.start++;
 
 	// Vsync
-	addTextButton(FRONTEND_VSYNC, FRONTEND_POS5X - 35, FRONTEND_POS5Y, _("Vertical sync"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_VSYNC_R, FRONTEND_POS5M - 55, FRONTEND_POS5Y, videoOptionsVsyncString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_VSYNC, _("Vertical sync"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_VSYNC_R, videoOptionsVsyncString(), WBUT_SECONDARY)));
+	row.start++;
 
 	// Antialiasing
-	addTextButton(FRONTEND_FSAA, FRONTEND_POS5X - 35, FRONTEND_POS6Y, _("Antialiasing*"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_FSAA_R, FRONTEND_POS5M - 55, FRONTEND_POS6Y, videoOptionsAntialiasingString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_FSAA, _("Antialiasing*"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_FSAA_R, videoOptionsAntialiasingString(), WBUT_SECONDARY)));
+	row.start++;
 
 	auto antialiasing_label = std::make_shared<W_LABEL>();
 	parent->attach(antialiasing_label);
@@ -1433,13 +1556,22 @@ void startVideoOptionsMenu()
 	const bool showDisplayScale = wzAvailableDisplayScales().size() > 1;
 	if (showDisplayScale)
 	{
-		addTextButton(FRONTEND_DISPLAYSCALE, FRONTEND_POS7X - 35, FRONTEND_POS7Y, videoOptionsDisplayScaleLabel(), WBUT_SECONDARY);
-		addTextButton(FRONTEND_DISPLAYSCALE_R, FRONTEND_POS7M - 55, FRONTEND_POS7Y, videoOptionsDisplayScaleString(), WBUT_SECONDARY);
+		grid->place({0}, row, addMargin(makeTextButton(FRONTEND_DISPLAYSCALE, videoOptionsDisplayScaleLabel(), WBUT_SECONDARY)));
+		grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_DISPLAYSCALE_R, videoOptionsDisplayScaleString(), WBUT_SECONDARY)));
+		row.start++;
 	}
 
 	// Gfx Backend
-	addTextButton(FRONTEND_GFXBACKEND, ((showDisplayScale) ? FRONTEND_POS8X : FRONTEND_POS7X) - 35, ((showDisplayScale) ? FRONTEND_POS8Y : FRONTEND_POS7Y), _("Graphics Backend*"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_GFXBACKEND_R, ((showDisplayScale) ? FRONTEND_POS8M : FRONTEND_POS7M) - 55, ((showDisplayScale) ? FRONTEND_POS8Y : FRONTEND_POS7Y), videoOptionsGfxBackendString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_GFXBACKEND, _("Graphics Backend*"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_GFXBACKEND_R, videoOptionsGfxBackendString(), WBUT_SECONDARY)));
+	row.start++;
+
+	grid->setGeometry(0, 0, FRONTEND_BUTWIDTH, grid->idealHeight());
+
+	auto scrollableList = ScrollableListWidget::make();
+	scrollableList->setGeometry(0, FRONTEND_POS2Y, FRONTEND_BOTFORMW - 1, FRONTEND_BOTFORMH - FRONTEND_POS2Y - 1);
+	scrollableList->addItem(grid);
+	parent->attach(scrollableList);
 
 	// Add some text down the side of the form
 	addSideText(FRONTEND_SIDETEXT, FRONTEND_SIDEX, FRONTEND_SIDEY, _("VIDEO OPTIONS"));
@@ -1685,17 +1817,6 @@ char const *mouseOptionsCursorModeString()
 	return war_GetColouredCursor() ? _("On") : _("Off");
 }
 
-char const *mouseOptionsScrollEventString()
-{
-	switch(war_GetScrollEvent())
-	{
-	    case 0: return _("Map/Radar Zoom");
-	    case 1: return _("Game Speed");
-	    case 2: return _("Camera Pitch");
-	    default: return "";
-	}
-}
-
 // ////////////////////////////////////////////////////////////////////////////
 // Mouse Options
 void startMouseOptionsMenu()
@@ -1704,43 +1825,51 @@ void startMouseOptionsMenu()
 	addTopForm(false);
 	addBottomForm();
 
+	WIDGET *parent = widgGetFromID(psWScreen, FRONTEND_BOTFORM);
+
+	auto grid = std::make_shared<GridLayout>();
+	grid_allocation::slot row(0);
+
 	////////////
 	// mouseflip
-	addTextButton(FRONTEND_MFLIP,   FRONTEND_POS2X - 35, FRONTEND_POS2Y, _("Reverse Rotation"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_MFLIP_R, FRONTEND_POS2M - 55, FRONTEND_POS2Y, mouseOptionsMflipString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_MFLIP, _("Reverse Rotation"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_MFLIP_R, mouseOptionsMflipString(), WBUT_SECONDARY)));
+	row.start++;
 
 	// Cursor trapping
-	addTextButton(FRONTEND_TRAP,   FRONTEND_POS3X - 35, FRONTEND_POS3Y, _("Trap Cursor"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_TRAP_R, FRONTEND_POS3M - 55, FRONTEND_POS3Y, mouseOptionsTrapString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_TRAP, _("Trap Cursor"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_TRAP_R, mouseOptionsTrapString(), WBUT_SECONDARY)));
+	row.start++;
 
 	////////////
 	// left-click orders
-	addTextButton(FRONTEND_MBUTTONS,   FRONTEND_POS2X - 35, FRONTEND_POS4Y, _("Switch Mouse Buttons"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_MBUTTONS_R, FRONTEND_POS2M - 55, FRONTEND_POS4Y, mouseOptionsMbuttonsString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_MBUTTONS, _("Switch Mouse Buttons"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_MBUTTONS_R, mouseOptionsMbuttonsString(), WBUT_SECONDARY)));
+	row.start++;
 
 	////////////
 	// middle-click rotate
-	addTextButton(FRONTEND_MMROTATE,   FRONTEND_POS2X - 35, FRONTEND_POS5Y, _("Rotate Screen"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_MMROTATE_R, FRONTEND_POS2M - 55, FRONTEND_POS5Y, mouseOptionsMmrotateString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_MMROTATE, _("Rotate Screen"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_MMROTATE_R, mouseOptionsMmrotateString(), WBUT_SECONDARY)));
+	row.start++;
 
 	// Hardware / software cursor toggle
-	addTextButton(FRONTEND_CURSORMODE,   FRONTEND_POS4X - 35, FRONTEND_POS6Y, _("Colored Cursors"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_CURSORMODE_R, FRONTEND_POS4M - 55, FRONTEND_POS6Y, mouseOptionsCursorModeString(), WBUT_SECONDARY);
+	grid->place({0}, row, addMargin(makeTextButton(FRONTEND_CURSORMODE, _("Colored Cursors"), WBUT_SECONDARY)));
+	grid->place({1, 1, false}, row, addMargin(makeTextButton(FRONTEND_CURSORMODE_R, mouseOptionsCursorModeString(), WBUT_SECONDARY)));
+	row.start++;
 
-	// Function of the scroll wheel
-	addTextButton(FRONTEND_SCROLLEVENT,   FRONTEND_POS5X - 35, FRONTEND_POS7Y, _("Scroll Event"), WBUT_SECONDARY);
-	addTextButton(FRONTEND_SCROLLEVENT_R, FRONTEND_POS5M - 55, FRONTEND_POS7Y, mouseOptionsScrollEventString(), WBUT_SECONDARY);
+	grid->setGeometry(0, 0, FRONTEND_BUTWIDTH, grid->idealHeight());
+
+	auto scrollableList = ScrollableListWidget::make();
+	scrollableList->setGeometry(0, FRONTEND_POS2Y, FRONTEND_BOTFORMW - 1, FRONTEND_BOTFORMH - FRONTEND_POS2Y - 1);
+	scrollableList->addItem(grid);
+	parent->attach(scrollableList);
 
 	// Add some text down the side of the form
 	addSideText(FRONTEND_SIDETEXT, FRONTEND_SIDEX, FRONTEND_SIDEY, _("MOUSE OPTIONS"));
 
 	// Quit/return
 	addMultiBut(psWScreen, FRONTEND_BOTFORM, FRONTEND_QUIT, 10, 10, 30, 29, P_("menu", "Return"), IMAGE_RETURN, IMAGE_RETURN_HI, IMAGE_RETURN_HI);
-}
-
-void seqScrollEvent()
-{
-	war_SetScrollEvent(seqCycle(war_GetScrollEvent(), 0, 1, 2));
 }
 
 bool runMouseOptionsMenu()
@@ -1778,12 +1907,6 @@ bool runMouseOptionsMenu()
 		war_SetColouredCursor(!war_GetColouredCursor());
 		widgSetString(psWScreen, FRONTEND_CURSORMODE_R, mouseOptionsCursorModeString());
 		wzSetCursor(CURSOR_DEFAULT);
-		break;
-
-	case FRONTEND_SCROLLEVENT:
-	case FRONTEND_SCROLLEVENT_R:
-		seqScrollEvent();
-		widgSetString(psWScreen, FRONTEND_SCROLLEVENT_R, mouseOptionsScrollEventString());
 		break;
 
 	case FRONTEND_QUIT:
@@ -1890,7 +2013,8 @@ void startGameOptionsMenu()
 	addMultiBut(psWScreen, FRONTEND_BOTFORM, FRONTEND_QUIT, 10, 10, 30, 29, P_("menu", "Return"), IMAGE_RETURN, IMAGE_RETURN_HI, IMAGE_RETURN_HI);
 
 	// "Help Us Translate" link
-	addSmallTextButton(FRONTEND_HYPERLINK, FRONTEND_POS9X, FRONTEND_POS9Y, "Help us improve translations of Warzone 2100: https://translate.wz2100.net", 0);
+	const auto helpTranslateMessage = astringf(_("Help us improve translations of Warzone 2100: %s"), TRANSLATION_URL);
+	addSmallTextButton(FRONTEND_HYPERLINK, FRONTEND_POS9X, FRONTEND_POS9Y, helpTranslateMessage.c_str(), 0);
 	widgSetTip(psWScreen, FRONTEND_HYPERLINK, _("Click to open webpage."));
 
 	// Add some text down the side of the form
@@ -1905,7 +2029,7 @@ bool runGameOptionsMenu()
 	switch (id)
 	{
 	case FRONTEND_HYPERLINK:
-		openURLInBrowser("https://translate.wz2100.net");
+		openURLInBrowser(TRANSLATION_URL);
 		break;
 	case FRONTEND_LANGUAGE:
 	case FRONTEND_LANGUAGE_R:
@@ -1931,6 +2055,22 @@ bool runGameOptionsMenu()
 	case FRONTEND_DIFFICULTY_R:
 		setDifficultyLevel(seqCycle(getDifficultyLevel(), DL_EASY, 1, DL_INSANE));
 		widgSetString(psWScreen, FRONTEND_DIFFICULTY_R, gameOptionsDifficultyString());
+		if (getDifficultyLevel() == DL_INSANE)
+		{
+			const std::string DIFF_TAG = "difficulty";
+
+			if (!hasNotificationsWithTag(DIFF_TAG))
+			{
+				WZ_Notification notification;
+				notification.duration = 10 * GAME_TICKS_PER_SEC;;
+				notification.contentTitle = _("Insane Difficulty");
+				notification.contentText = _("This difficulty is for very experienced players!");
+				notification.tag = DIFF_TAG;
+				notification.largeIcon = WZ_Notification_Image("images/notifications/skull_crossbones.png");
+
+				addNotification(notification, WZ_Notification_Trigger::Immediate());
+			}
+		}
 		break;
 
 	case FRONTEND_CAMERASPEED:
@@ -2300,25 +2440,21 @@ W_LABEL *addSideText(UDWORD id, UDWORD PosX, UDWORD PosY, const char *txt)
 }
 
 // ////////////////////////////////////////////////////////////////////////////
-static std::shared_ptr<W_BUTTON> makeTextButton(UDWORD id,  UDWORD PosX, UDWORD PosY, const std::string &txt, unsigned int style)
+static std::shared_ptr<W_BUTTON> makeTextButton(UDWORD id, const std::string &txt, unsigned int style)
 {
 	W_BUTINIT sButInit;
 
 	sButInit.formID = FRONTEND_BOTFORM;
 	sButInit.id = id;
-	sButInit.x = (short)PosX;
-	sButInit.y = (short)PosY;
 
 	// Align
 	if (!(style & WBUT_TXTCENTRE))
 	{
-		sButInit.width = (short)(iV_GetTextWidth(txt.c_str(), font_large) + 10);
-		sButInit.x += 35;
+		sButInit.width = (short)iV_GetTextWidth(txt.c_str(), font_large);
 	}
 	else
 	{
 		sButInit.style |= WBUT_TXTCENTRE;
-		sButInit.width = FRONTEND_BUTWIDTH;
 	}
 
 	// Enable right clicks
@@ -2350,9 +2486,24 @@ static std::shared_ptr<W_BUTTON> makeTextButton(UDWORD id,  UDWORD PosX, UDWORD 
 	return button;
 }
 
+static std::shared_ptr<WIDGET> addMargin(std::shared_ptr<WIDGET> widget)
+{
+	return Margin(0, 20).wrap(widget);
+}
+
 void addTextButton(UDWORD id,  UDWORD PosX, UDWORD PosY, const std::string &txt, unsigned int style)
 {
-	widgGetFromID(psWScreen, FRONTEND_BOTFORM)->attach(makeTextButton(id, PosX, PosY, txt, style));
+	auto button = makeTextButton(id, txt, style);
+	if (style & WBUT_TXTCENTRE)
+	{
+		button->setGeometry(PosX, PosY, FRONTEND_BUTWIDTH, button->height());
+	}
+	else
+	{
+		button->move(PosX + 35, PosY);
+	}
+
+	widgGetFromID(psWScreen, FRONTEND_BOTFORM)->attach(button);
 }
 
 W_BUTTON * addSmallTextButton(UDWORD id,  UDWORD PosX, UDWORD PosY, const char *txt, unsigned int style)
@@ -2405,13 +2556,11 @@ W_BUTTON * addSmallTextButton(UDWORD id,  UDWORD PosX, UDWORD PosY, const char *
 }
 
 // ////////////////////////////////////////////////////////////////////////////
-void addFESlider(UDWORD id, UDWORD parent, UDWORD x, UDWORD y, UDWORD stops, UDWORD pos)
+static std::shared_ptr<W_SLIDER> makeFESlider(UDWORD id, UDWORD parent, UDWORD stops, UDWORD pos)
 {
 	W_SLDINIT sSldInit;
 	sSldInit.formID		= parent;
 	sSldInit.id			= id;
-	sSldInit.x			= (short)x;
-	sSldInit.y			= (short)y;
 	sSldInit.width		= iV_GetImageWidth(IntImages, IMAGE_SLIDER_BIG);
 	sSldInit.height		= iV_GetImageHeight(IntImages, IMAGE_SLIDER_BIG);
 	sSldInit.numStops	= (UBYTE) stops;
@@ -2419,7 +2568,16 @@ void addFESlider(UDWORD id, UDWORD parent, UDWORD x, UDWORD y, UDWORD stops, UDW
 	sSldInit.pos		= (UBYTE) pos;
 	sSldInit.pDisplay	= displayBigSlider;
 	sSldInit.pCallback  = intUpdateQuantitySlider;
-	widgAddSlider(psWScreen, &sSldInit);
+
+	auto slider = std::make_shared<W_SLIDER>(&sSldInit);
+	return slider;
+}
+
+void addFESlider(UDWORD id, UDWORD parent, UDWORD x, UDWORD y, UDWORD stops, UDWORD pos)
+{
+	auto slider = makeFESlider(id, parent, stops, pos);
+	slider->move(x, y);
+	widgGetFromID(psWScreen, parent)->attach(slider);
 }
 
 // ////////////////////////////////////////////////////////////////////////////

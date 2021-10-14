@@ -30,6 +30,7 @@
 #include "lib/sound/sounddefs.h"
 #include "lib/ivis_opengl/screen.h"
 #include "lib/ivis_opengl/pieclip.h"
+#include "lib/ivis_opengl/piestate.h" // for fog
 
 #include "ai.h"
 #include "component.h"
@@ -48,6 +49,9 @@
 #include "lib/framework/wzapp.h"
 #include "display3d.h" // for building animation speed
 #include "display.h"
+#include "keybind.h" // for MAP_ZOOM_RATE_STEP
+#include "loadsave.h" // for autosaveEnabled
+#include "clparse.h" // for autoratingUrl
 
 #include <type_traits>
 
@@ -278,15 +282,15 @@ bool loadConfig()
 	debug(LOG_WZ, "Reading configuration from: %s", fileStreamGenerator->realPath().c_str());
 	if (auto value = iniGetIntegerOpt("voicevol"))
 	{
-		sound_SetUIVolume(static_cast<double>(value.value()) / 100.0);
+		sound_SetUIVolume(static_cast<float>(value.value()) / 100.0f);
 	}
 	if (auto value = iniGetIntegerOpt("fxvol"))
 	{
-		sound_SetEffectsVolume(static_cast<double>(value.value()) / 100.0);
+		sound_SetEffectsVolume(static_cast<float>(value.value()) / 100.0f);
 	}
 	if (auto value = iniGetIntegerOpt("cdvol"))
 	{
-		sound_SetMusicVolume(static_cast<double>(value.value()) / 100.0);
+		sound_SetMusicVolume(static_cast<float>(value.value()) / 100.0f);
 	}
 	if (auto value = iniGetBoolOpt("music_enabled"))
 	{
@@ -302,15 +306,18 @@ bool loadConfig()
 	}
 	if (auto value = iniGetIntegerOpt("mapZoom"))
 	{
-		war_SetMapZoom(value.value());
+		int v = value.value();
+		war_SetMapZoom((v % MAP_ZOOM_CONFIG_STEP != 0) ? STARTDISTANCE : v);
 	}
 	if (auto value = iniGetIntegerOpt("mapZoomRate"))
 	{
-		war_SetMapZoomRate(value.value());
+		int v = value.value();
+		war_SetMapZoomRate((v % MAP_ZOOM_RATE_STEP != 0) ? MAP_ZOOM_RATE_DEFAULT : v);
 	}
 	if (auto value = iniGetIntegerOpt("radarZoom"))
 	{
-		war_SetRadarZoom(value.value());
+		int v = value.value();
+		war_SetRadarZoom((v % RADARZOOM_STEP != 0) ? DEFAULT_RADARZOOM : v);
 	}
 	if (iniGeneral.has("language"))
 	{
@@ -325,7 +332,8 @@ bool loadConfig()
 	showUNITCOUNT = iniGetBool("showUNITCOUNT", false).value();
 	if (auto value = iniGetIntegerOpt("cameraSpeed"))
 	{
-		war_SetCameraSpeed(value.value());
+		int v = value.value();
+		war_SetCameraSpeed((v % CAMERASPEED_STEP != 0) ? CAMERASPEED_DEFAULT : v);
 	}
 	setShakeStatus(iniGetBool("shake", false).value());
 	setCameraAccel(iniGetBool("cameraAccel", true).value());
@@ -338,14 +346,11 @@ bool loadConfig()
 	{
 		war_SetRadarJump(value.value());
 	}
-	if (auto value = iniGetIntegerOpt("scrollEvent"))
-	{
-		war_SetScrollEvent(value.value());
-	}
 	rotateRadar = iniGetBool("rotateRadar", true).value();
 	radarRotationArrow = iniGetBool("radarRotationArrow", true).value();
 	hostQuitConfirmation = iniGetBool("hostQuitConfirmation", true).value();
 	war_SetPauseOnFocusLoss(iniGetBool("PauseOnFocusLoss", false).value());
+	setAutoratingUrl(iniGetString("autoratingUrl", "").value());
 	NETsetMasterserverName(iniGetString("masterserver_name", "lobby.wz2100.net").value().c_str());
 	mpSetServerName(iniGetString("server_name", "").value().c_str());
 //	iV_font(ini.value("fontname", "DejaVu Sans").toString().toUtf8().constData(),
@@ -378,7 +383,7 @@ bool loadConfig()
 	game.power = iniGetInteger("powerLevel", LEV_MED).value();
 	game.base = iniGetInteger("base", CAMP_BASE).value();
 	game.alliance = iniGetInteger("alliance", NO_ALLIANCES).value();
-	game.scavengers = iniGetBool("scavengers", false).value();
+	game.scavengers = iniGetInteger("newScavengers", SCAVENGERS).value();
 	bEnemyAllyRadarColor = iniGetBool("radarObjectMode", false).value();
 	radarDrawMode = (RADAR_DRAW_MODE)iniGetInteger("radarTerrainMode", RADAR_MODE_DEFAULT).value();
 	radarDrawMode = (RADAR_DRAW_MODE)MIN(NUM_RADAR_MODES - 1, radarDrawMode); // restrict to allowed values
@@ -463,6 +468,19 @@ bool loadConfig()
 	}
 	BlueprintTrackAnimationSpeed = iniGetInteger("BlueprintTrackAnimationSpeed", 20).value();
 	lockCameraScrollWhileRotating = iniGetBool("lockCameraScrollWhileRotating", false).value();
+	autosaveEnabled = iniGetBool("autosaveEnabled", true).value();
+	bool fogEnabled = iniGetBool("fog", false).value();
+	if (fogEnabled)
+	{
+		pie_EnableFog(true);
+	}
+	else
+	{
+		pie_SetFogStatus(false);
+		pie_EnableFog(false);
+	}
+	war_setAutoLagKickSeconds(iniGetInteger("hostAutoLagKickSeconds", war_getAutoLagKickSeconds()).value());
+	war_setDisableReplayRecording(iniGetBool("disableReplayRecord", war_getDisableReplayRecording()).value());
 	ActivityManager::instance().endLoadingSettings();
 	return true;
 }
@@ -531,7 +549,6 @@ bool saveConfig()
 	iniSetInteger("difficulty", getDifficultyLevel());		// level
 	iniSetInteger("cameraSpeed", war_GetCameraSpeed());	// camera speed
 	iniSetBool("radarJump", war_GetRadarJump());		// radar jump
-	iniSetInteger("scrollEvent", war_GetScrollEvent());	// scroll event
 	iniSetBool("cameraAccel", getCameraAccel());		// camera acceleration
 	iniSetInteger("shake", (int)getShakeStatus());		// screenshake
 	iniSetInteger("mouseflip", (int)(getInvertMouseStatus()));	// flipmouse
@@ -559,6 +576,7 @@ bool saveConfig()
 	iniSetBool("radarRotationArrow", radarRotationArrow);
 	iniSetBool("hostQuitConfirmation", hostQuitConfirmation);
 	iniSetBool("PauseOnFocusLoss", war_GetPauseOnFocusLoss());
+	iniSetString("autoratingUrl", getAutoratingUrl());
 	iniSetString("masterserver_name", NETgetMasterserverName());
 	iniSetInteger("masterserver_port", (int)NETgetMasterserverPort());
 	iniSetString("server_name", mpGetServerName());
@@ -589,7 +607,7 @@ bool saveConfig()
 			iniSetInteger("powerLevel", game.power);				// power
 			iniSetInteger("base", game.base);				// size of base
 			iniSetInteger("alliance", (int)game.alliance);		// allow alliances
-			iniSetBool("scavengers", game.scavengers);
+			iniSetInteger("newScavengers", game.scavengers);
 		}
 		iniSetString("playerName", (char *)sPlayer);		// player name
 	}
@@ -599,6 +617,10 @@ bool saveConfig()
 	iniSetString("jsbackend", to_string(war_getJSBackend()));
 	iniSetInteger("BlueprintTrackAnimationSpeed", BlueprintTrackAnimationSpeed);
 	iniSetBool("lockCameraScrollWhileRotating", lockCameraScrollWhileRotating);
+	iniSetBool("autosaveEnabled", autosaveEnabled);
+	iniSetBool("fog", pie_GetFogEnabled());
+	iniSetInteger("hostAutoLagKickSeconds", war_getAutoLagKickSeconds());
+	iniSetBool("disableReplayRecord", war_getDisableReplayRecording());
 
 	// write out ini file changes
 	bool result = saveIniFile(file, ini);

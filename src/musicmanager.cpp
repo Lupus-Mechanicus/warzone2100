@@ -24,15 +24,16 @@
 
 #include "musicmanager.h"
 
+#include "lib/framework/frame.h"
+#include "lib/framework/input.h"
 #include "lib/ivis_opengl/pieblitfunc.h"
+#include "input/manager.h"
 #include "intdisplay.h"
 #include "hci.h"
 #include "multiint.h"
 #include "frontend.h"
 #include "frend.h"
 #include "ingameop.h"
-#include "keymap.h"
-#include "keybind.h"
 
 #include "lib/sound/playlist.h"
 #include "lib/widget/button.h"
@@ -397,7 +398,7 @@ static gfx_api::texture* loadImageToTexture(const std::string& imagePath)
 		return nullptr;
 	}
 	auto pixel_format = iV_getPixelFormat(&ivImage);
-	size_t mip_count = floor(log(std::max(ivImage.width, ivImage.height))) + 1;
+	size_t mip_count = static_cast<size_t>(floor(log(std::max(ivImage.width, ivImage.height)))) + 1;
 	gfx_api::texture* pAlbumCoverTexture = gfx_api::context::get().create_texture(mip_count, ivImage.width, ivImage.height, pixel_format);
 	pAlbumCoverTexture->upload_and_generate_mipmaps(0u, 0u, ivImage.width, ivImage.height, pixel_format, ivImage.bmp);
 	iV_unloadImage(&ivImage);
@@ -481,7 +482,7 @@ void TrackDetailsForm::display(int xOffset, int yOffset)
 
 static void UpdateTrackDetailsBox(TrackDetailsForm *pTrackDetailsBox)
 {
-	ASSERT(pTrackDetailsBox, "pTrackDetailsBox is null");
+	ASSERT_OR_RETURN(, pTrackDetailsBox, "pTrackDetailsBox is null");
 
 	// Add "Now Playing" label
 	if (!psNowPlaying)
@@ -695,7 +696,7 @@ static void addTrackList(WIDGET *parent, bool ingame)
 	auto pTracksScrollableList = ScrollableListWidget::make();
 	parent->attach(pTracksScrollableList);
 	pTracksScrollableList->setBackgroundColor(WZCOL_TRANSPARENT_BOX);
-	pTracksScrollableList->setCalcLayout([ingame](WIDGET *psWidget, unsigned int, unsigned int, unsigned int, unsigned int){
+	pTracksScrollableList->setCalcLayout([ingame](WIDGET *psWidget) {
 		psWidget->setGeometry(GetTrackListStartXPos(ingame), TL_Y, TL_ENTRYW, GetNumVisibleTracks() * TL_ENTRYH);
 	});
 
@@ -812,7 +813,7 @@ protected:
 		sButInit.id			= id;
 		sButInit.y			= y;
 		sButInit.pText		= text;
-		sButInit.calcLayout = [y] (WIDGET *psWidget, unsigned int, unsigned int, unsigned int, unsigned int) {
+		sButInit.calcLayout = [y] (WIDGET *psWidget) {
 			psWidget->move(0, y);
 		};
 
@@ -846,9 +847,10 @@ static bool musicManager(WIDGET *parent, bool ingame)
 	return true;
 }
 
-bool startInGameMusicManager()
+bool startInGameMusicManager(InputManager& inputManager)
 {
-	bAllowOtherKeyPresses = false;
+	inputManager.contexts().pushState();
+	inputManager.contexts().makeAllInactive();
 	return musicManager(psWScreen->psForm.get(), true);
 }
 
@@ -876,18 +878,18 @@ static void perFrameCleanup()
 	}
 }
 
-bool runInGameMusicManager(unsigned id)
+bool runInGameMusicManager(unsigned id, InputManager& inputManager)
 {
 	if (id == MM_RETURN)			// return
 	{
-		bAllowOtherKeyPresses = true;
+		inputManager.contexts().popState();
 		widgDelete(psWScreen, MM_FORM);
 		inputLoseFocus();
 		return true;
 	}
 	else if (id == MM_GO_BACK)
 	{
-		bAllowOtherKeyPresses = true;
+		inputManager.contexts().popState();
 		widgDelete(psWScreen, MM_FORM);
 		intReopenMenuWithoutUnPausing();
 	}
@@ -923,10 +925,16 @@ bool runMusicManager()
 
 static void CDAudioEvent_UpdateCurrentTrack(const std::shared_ptr<const WZ_TRACK>& track)
 {
-	if (selectedTrack != track)
+	if (selectedTrack == track)
 	{
-		selectedTrack = track;
-		UpdateTrackDetailsBox(dynamic_cast<TrackDetailsForm *>(widgGetFromID(psWScreen, MULTIOP_CONSOLEBOX)));
+		return;
+	}
+	selectedTrack = track;
+	if (!psWScreen) { return; }
+	auto psTrackDetailsForm = dynamic_cast<TrackDetailsForm *>(widgGetFromID(psWScreen, MULTIOP_CONSOLEBOX));
+	if (psTrackDetailsForm)
+	{
+		UpdateTrackDetailsBox(psTrackDetailsForm);
 	}
 }
 

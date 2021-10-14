@@ -121,10 +121,9 @@ set(CMAKE_REQUIRED_INCLUDES "${_sdl2_include_dir}")
 CHECK_INCLUDE_FILE_CXX("SDL_vulkan.h" HAVE_SDL_VULKAN_H)
 set(CMAKE_REQUIRED_INCLUDES "${_prior_CMAKE_REQUIRED_INCLUDES}")
 
-add_library(sdl-backend ${HEADERS} ${SRC})
-if(WZ_TARGET_ADDITIONAL_PROPERTIES)
-	SET_TARGET_PROPERTIES(sdl-backend PROPERTIES ${WZ_TARGET_ADDITIONAL_PROPERTIES})
-endif()
+add_library(sdl-backend STATIC ${HEADERS} ${SRC})
+include(WZTargetConfiguration)
+WZ_TARGET_CONFIGURATION(sdl-backend)
 
 target_link_libraries(sdl-backend PRIVATE framework ivis-opengl)
 set_property(TARGET sdl-backend PROPERTY FOLDER "lib")

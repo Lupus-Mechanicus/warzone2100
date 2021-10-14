@@ -4,6 +4,7 @@ include("script/campaign/templates.js");
 
 var index; //Number of bonus transports that have flown in.
 var startedFromMenu;
+var truckLocCounter;
 
 //Remove Nexus VTOL droids.
 camAreaEvent("vtolRemoveZone", function(droid)
@@ -80,6 +81,30 @@ function enableAllFactories()
 	}
 }
 
+function truckDefense()
+{
+	if (enumDroid(NEXUS, DROID_CONSTRUCT).length === 0)
+	{
+		removeTimer("truckDefense");
+		return;
+	}
+
+	var list = ["Emplacement-Howitzer150", "Emplacement-MdART-pit", "Emplacement-RotHow"];
+	var position;
+
+	if (truckLocCounter === 0)
+	{
+		position = camMakePos("buildPos1");
+		truckLocCounter += 1;
+	}
+	else
+	{
+		position = camMakePos("buildPos2");
+		truckLocCounter = 0;
+	}
+
+	camQueueBuilding(NEXUS, list[camRand(list.length)], position);
+}
 
 //Extra transport units are only awarded to those who start Gamma campaign
 //from the main menu.
@@ -159,33 +184,27 @@ function groupPatrolNoTrigger()
 //Gives starting tech and research.
 function cam3Setup()
 {
-	var x = 0;
-	var l = 0;
 	const NEXUS_RES = [
-		"R-Wpn-MG1Mk1", "R-Sys-Engineering03", "R-Defense-WallUpgrade07",
-		"R-Struc-Materials07", "R-Struc-Factory-Upgrade06",
-		"R-Struc-VTOLPad-Upgrade06", "R-Vehicle-Engine09", "R-Vehicle-Metals07",
-		"R-Cyborg-Metals07", "R-Vehicle-Armor-Heat03", "R-Cyborg-Armor-Heat03",
+		"R-Sys-Engineering03", "R-Defense-WallUpgrade07", "R-Struc-Materials07",
+		"R-Struc-VTOLPad-Upgrade06", "R-Wpn-Bomb-Damage03", "R-Sys-NEXUSrepair",
 		"R-Vehicle-Prop-Hover02", "R-Vehicle-Prop-VTOL02", "R-Cyborg-Legs02",
-		"R-Wpn-Bomb-Damage03", "R-Wpn-Missile-Damage01", "R-Wpn-Missile-ROF01",
-		"R-Sys-Sensor-Upgrade01", "R-Sys-NEXUSrepair", "R-Wpn-Rail-Damage01",
-		"R-Wpn-Rail-ROF01", "R-Wpn-Rail-Accuracy01", "R-Wpn-Flamer-Damage06",
+		"R-Wpn-Mortar-Acc03", "R-Wpn-MG-Damage08", "R-Wpn-Mortar-ROF04",
+		"R-Vehicle-Engine07", "R-Vehicle-Metals07", "R-Vehicle-Armor-Heat04",
+		"R-Cyborg-Metals07", "R-Cyborg-Armor-Heat04", "R-Wpn-RocketSlow-ROF04",
+		"R-Wpn-AAGun-Damage05", "R-Wpn-AAGun-ROF04", "R-Wpn-Howitzer-Damage09",
+		"R-Wpn-Cannon-Damage07", "R-Wpn-Cannon-ROF04",
+		"R-Wpn-Missile-Damage01", "R-Wpn-Missile-ROF01", "R-Wpn-Missile-Accuracy01",
+		"R-Wpn-Rail-Damage01", "R-Wpn-Rail-ROF01", "R-Wpn-Rail-Accuracy01",
+		"R-Wpn-Energy-Damage02", "R-Wpn-Energy-ROF01", "R-Wpn-Energy-Accuracy01",
 	];
 
-	for (x = 0, l = BETA_TECH.length; x < l; ++x)
+	for (var x = 0, l = STRUCTS_ALPHA.length; x < l; ++x)
 	{
-		makeComponentAvailable(BETA_TECH[x], CAM_HUMAN_PLAYER);
+		enableStructure(STRUCTS_ALPHA[x], CAM_HUMAN_PLAYER);
 	}
 
-	for (x = 0, l = STRUCTS_GAMMA.length; x < l; ++x)
-	{
-		enableStructure(STRUCTS_GAMMA[x], CAM_HUMAN_PLAYER);
-	}
-
-	camCompleteRequiredResearch(ALPHA_RESEARCH, CAM_HUMAN_PLAYER);
-	camCompleteRequiredResearch(ALPHA_RESEARCH, NEXUS);
-
-	camCompleteRequiredResearch(PLAYER_RES_GAMMA, CAM_HUMAN_PLAYER);
+	camCompleteRequiredResearch(GAMMA_ALLY_RES, CAM_HUMAN_PLAYER);
+	camCompleteRequiredResearch(GAMMA_ALLY_RES, NEXUS);
 	camCompleteRequiredResearch(NEXUS_RES, NEXUS);
 
 	enableResearch("R-Wpn-Howitzer03-Rot", CAM_HUMAN_PLAYER);
@@ -288,7 +307,7 @@ function eventStartLevel()
 				count: -1,
 			},
 			groupSize: 4,
-			throttle: camChangeOnDiff(camSecondsToMilliseconds(30)),
+			throttle: camChangeOnDiff(camSecondsToMilliseconds(35)),
 			group: camMakeGroup("cybValleyPatrol"),
 			templates: [cTempl.nxcyrail, cTempl.nxcyscou]
 		},
@@ -319,14 +338,23 @@ function eventStartLevel()
 				count: -1,
 			},
 			groupSize: 4,
-			throttle: camChangeOnDiff(camSecondsToMilliseconds(50)),
+			throttle: camChangeOnDiff(camSecondsToMilliseconds(45)),
 			templates: [cTempl.nxcyrail, cTempl.nxcyscou]
 		},
 	});
 
-	camManageTrucks(NEXUS);
-	camPlayVideos(["CAM3_INT", "MB3A_MSG2"]);
+	if (difficulty >= HARD)
+	{
+		addDroid(NEXUS, 8, 112, "Truck Retribution Hover", "Body7ABT", "hover02", "", "", "Spade1Mk1");
+
+		camManageTrucks(NEXUS);
+
+		setTimer("truckDefense", camChangeOnDiff(camMinutesToMilliseconds(4.5)));
+	}
+
+	camPlayVideos([{video: "CAM3_INT", type: CAMP_MSG}, {video: "MB3A_MSG2", type: MISS_MSG}]);
 	startedFromMenu = false;
+	truckLocCounter = 0;
 
 	//Only if starting Gamma directly rather than going through Beta
 	if (enumDroid(CAM_HUMAN_PLAYER, DROID_SUPERTRANSPORTER).length === 0)

@@ -4,11 +4,16 @@ on:
   push:
     branches-ignore:
       - 'l10n_**' # Push events to translation service branches (that begin with "l10n_")
-    # Sequence of patterns matched against refs/tags
-    tags:
-      - '*'
   pull_request:
     # Match all pull requests
+  # Support running after "Draft Tag Release" workflow completes, as part of automated release process
+  workflow_run:
+    workflows: ["Draft Tag Release"]
+    push:
+      tags:
+        - '*'
+    types: 
+      - completed
 
 jobs:
   macos-build:
@@ -56,6 +61,14 @@ jobs:
       with:
         fetch-depth: 0
         path: 'src'
+    - name: Configure Repo Checkout
+      id: checkout-config
+      working-directory: ./src
+      env:
+        WORKFLOW_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      run: |
+        . .ci/githubactions/checkout_config.sh
     - name: Prepare Git Repo for autorevision
       working-directory: ./src
       run: cmake -P .ci/githubactions/prepare_git_repo.cmake
@@ -66,7 +79,7 @@ jobs:
       run: |
         brew install gettext
         # NOTE: Specify an explicit Asciidoctor version to help ensure reproducible builds
-        gem install asciidoctor -v 2.0.12 --no-document
+        gem install asciidoctor -v 2.0.16 --no-document
 
         #brew update
         #if (brew outdated | grep cmake > /dev/null); then echo "upgrading CMake"; brew upgrade cmake; fi
@@ -91,6 +104,8 @@ jobs:
         echo "MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET}"
     - name: configure_mac.cmake
       working-directory: ./build
+      env:
+        SENTRY_IO_DSN: '${{ secrets.CRASHREPORTING_SENTRY_IO_DSN }}'
       run: |
         ADDITIONAL_CMAKE_ARGUMENTS="-DCMAKE_OSX_ARCHITECTURES=${WZ_OSX_TARGET_ARCH};-DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY=-;-DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO"
         echo "WZ_INCLUDE_VIDEOS=${WZ_INCLUDE_VIDEOS}"
@@ -100,6 +115,20 @@ jobs:
           ADDITIONAL_CMAKE_ARGUMENTS="${ADDITIONAL_CMAKE_ARGUMENTS};-DWZ_INCLUDE_VIDEOS:BOOL=OFF"
         fi
         echo "ADDITIONAL_CMAKE_ARGUMENTS=${ADDITIONAL_CMAKE_ARGUMENTS}"
+
+        WZ_ENABLE_SENTRY="false"
+        if [[ "${GITHUB_EVENT_NAME}" == "push" ]] && [[ "${GITHUB_REF}" == "refs/heads/master" ]]; then
+          WZ_ENABLE_SENTRY="true"
+        fi
+        if [[ "${GITHUB_EVENT_NAME}" == "workflow_run" ]]; then
+          WZ_ENABLE_SENTRY="true"
+        fi
+        # Always build Sentry anyway, even if we don't pass the configuration to actually enable it
+        ADDITIONAL_CMAKE_ARGUMENTS="${ADDITIONAL_CMAKE_ARGUMENTS};-DWZ_BUILD_SENTRY:BOOL=ON"
+        if [[ "${WZ_ENABLE_SENTRY}" == "true" ]] && [[ ! -z "${SENTRY_IO_DSN}" ]]; then
+          # Pass the configuration to enable it
+          ADDITIONAL_CMAKE_ARGUMENTS="${ADDITIONAL_CMAKE_ARGUMENTS};-DSENTRY_IO_DSN:STRING=${SENTRY_IO_DSN}"
+        fi
 
         echo "-DVCPKG_BUILD_TYPE=release -DWZ_DISTRIBUTOR:STRING=\"${WZ_DISTRIBUTOR}\" -DADDITIONAL_CMAKE_ARGUMENTS=\"${ADDITIONAL_CMAKE_ARGUMENTS}\" -P ../src/configure_mac.cmake"
         #cmake -DVCPKG_BUILD_TYPE=release -DWZ_DISTRIBUTOR:STRING="${WZ_DISTRIBUTOR}" -DADDITIONAL_CMAKE_ARGUMENTS="${ADDITIONAL_CMAKE_ARGUMENTS}" -P ../src/configure_mac.cmake
@@ -173,7 +202,16 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
+          fetch-depth: 0
           path: 'src'
+      - name: Configure Repo Checkout
+        id: checkout-config
+        working-directory: ./src
+        env:
+          WORKFLOW_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          . .ci/githubactions/checkout_config.sh
       - name: Prep Environment
         run: |
           mkdir dl-artifacts
@@ -243,8 +281,18 @@ jobs:
       - uses: actions/upload-artifact@v2
         with:
           name: "warzone2100_macOS_universal"
-          path: ${{ env.OUTPUT_DIR }}
+          path: ${{ env.WZ_FULL_OUTPUT_ZIP_PATH }}
           if-no-files-found: 'error'
+      - name: Upload "universal" to release
+        if: success() && (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Draft Tag Release') && (github.repository == 'Warzone2100/warzone2100')
+        run: |
+          SOURCE_TAG="${WZ_GITHUB_REF#refs/tags/}"
+          echo "Uploading: ${WZ_FULL_OUTPUT_ZIP_PATH}"
+          gh release upload "${SOURCE_TAG}" "${WZ_FULL_OUTPUT_ZIP_PATH}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          WZ_GITHUB_REF: ${{ steps.checkout-config.outputs.WZ_GITHUB_REF }}
       - name: Clear OUTPUT_DIR
         run: |
           echo "OUTPUT_DIR=${OUTPUT_DIR}"
@@ -284,41 +332,59 @@ jobs:
           ZIP_SIZE="$(stat -f '%z' "${OUTPUT_DIR}/${DESIRED_ZIP_NAME}")"
           echo "  -> SHA512: ${ZIP_HASH}"
           echo "  -> Size (bytes): ${ZIP_SIZE}"
+          
+          echo "WZ_FULL_OUTPUT_ZIP_PATH=${OUTPUT_DIR}/${DESIRED_ZIP_NAME}" >> $GITHUB_ENV
 
           exit 0
       - uses: actions/upload-artifact@v2
         with:
           name: "warzone2100_macOS_universal_novideos"
-          path: ${{ env.OUTPUT_DIR }}
+          path: ${{ env.WZ_FULL_OUTPUT_ZIP_PATH }}
           if-no-files-found: 'error'
-
-  upload_release_artifacts:
-    if: startsWith(github.ref, 'refs/tags/') && (github.repository == 'Warzone2100/warzone2100')
-    name: Upload Release Artifacts
-    needs: macos_universal_combine
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download macOS universal artifact
-        uses: actions/download-artifact@v2
-        with:
-          name: warzone2100_macOS_universal
-          path: warzone2100_macOS_universal
-      - name: Download macOS universal (no videos) artifact
-        uses: actions/download-artifact@v2
-        with:
-          name: warzone2100_macOS_universal_novideos
-          path: warzone2100_macOS_universal_novideos
-      - name: Rename artifact zips
+      - name: Upload "universal_novideos" to release
+        if: success() && (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Draft Tag Release') && (github.repository == 'Warzone2100/warzone2100')
         run: |
-          mv "./warzone2100_macOS_universal/warzone2100_macOS_universal.zip" "./warzone2100_macOS.zip"
-          mv "./warzone2100_macOS_universal_novideos/warzone2100_macOS_universal_novideos.zip" "./warzone2100_macOS_novideos.zip"
-      - name: Upload to release
-        uses: past-due/action-gh-release@master
-        with:
-          # Do not explicitly specify a tag_name, so this action takes the github.ref and parses it for just the tag
-          files: |
-            ./warzone2100_macOS.zip
-            ./warzone2100_macOS_novideos.zip
-          draft: true
+          SOURCE_TAG="${WZ_GITHUB_REF#refs/tags/}"
+          echo "Uploading: ${WZ_FULL_OUTPUT_ZIP_PATH}"
+          gh release upload "${SOURCE_TAG}" "${WZ_FULL_OUTPUT_ZIP_PATH}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          WZ_GITHUB_REF: ${{ steps.checkout-config.outputs.WZ_GITHUB_REF }}
+
+  upload-debug-symbols:
+    name: 'Upload Debug Symbols'
+    runs-on: ubuntu-latest
+    # Run on push to master branch (development build), or tag release automation build
+    if: (github.repository == 'Warzone2100/warzone2100') && ((github.event_name == 'push' && github.ref == 'refs/heads/master') || (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Draft Tag Release'))
+    needs: macos_universal_combine
+    environment: upload_symbols
+    # For this job to work, the following secrets must be set in the 'upload_symbols' environment:
+    # SENTRY_AUTH_TOKEN
+    steps:
+      - name: Prep Environment
+        run: |
+          mkdir dl-archive
+      - name: Download Artifacts
+        uses: actions/download-artifact@v2
+        with:
+          name: 'warzone2100_macOS_universal_novideos'
+          path: ./dl-archive
+      - name: Extract archive
+        id: extract
+        run: |
+          OUTPUTDIR="wz-macOS"
+          ZIPFILE="./dl-archive/warzone2100_macOS_universal_novideos.zip"
+          unzip -o "${ZIPFILE}" -d "${OUTPUTDIR}" && rm "${ZIPFILE}"
+          echo "::set-output name=ARCHIVEDIR::${OUTPUTDIR}"
+      - name: 'Upload debug symbols'
+        env:
+          SENTRY_AUTH_TOKEN: '${{ secrets.SENTRY_AUTH_TOKEN }}'
+          WZ_ARCHIVE_DIR: '${{ steps.extract.outputs.ARCHIVEDIR }}'
+        run: |
+          if [[ -z "${SENTRY_AUTH_TOKEN}" ]]; then
+            echo "No SENTRY_AUTH_TOKEN - skipping"
+            exit 0
+          fi
+          docker pull getsentry/sentry-cli
+          docker run --rm -e SENTRY_AUTH_TOKEN -v "$(pwd):/work" getsentry/sentry-cli upload-dif --no-zips -o warzone2100 -p warzone2100 "${WZ_ARCHIVE_DIR}"

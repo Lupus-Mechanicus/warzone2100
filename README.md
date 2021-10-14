@@ -234,6 +234,22 @@ There are many cheat commands. Some examples:
 * "research all" - Everything is researched instantly
 * "let me win" - You win the current campaign mission
 * "superpower" - Gives you maximum power
+* "teach us" - Gives experience to selected units
+* "makemehero" - Makes selected units Heros
+* "clone wars" - Clone selected units (x10)
+* "clone wars!" - Clone selected units (x40)
+* "clone wars!!" - Clone selected units (x135)
+* "kill" - Kills selected object
+* "john kettley" - Toggles weather conditions
+* "get off my land" - Kills all enemy units and structures
+* "showfps" - Show average FPS
+* "reload me" - Reloads selected weapon instantly
+* "damage me" - Selected object takes 20% damage
+* "showunits" - Displays unit count information
+* "showorders" - Displays unit order/action state
+* "droidinfo" - Show unit stats
+
+All available commands can be found in the file: https://github.com/Warzone2100/warzone2100/blob/master/src/cheat.cpp
 
 Modding information
 -------------------
@@ -288,7 +304,7 @@ Do **not** use GitHub's "Download Zip" option, as it does not contain submodules
    * To build with Vulkan support: the full [Vulkan SDK](https://vulkan.lunarg.com/sdk/home) _(strongly recommended: ≥ 1.2.148.1)_
 * **Installing prerequisites:**
    * Using `get-dependencies_linux.sh`:
-      1. Specify one of the linux distros supported by the script: (`ubuntu`, `fedora`, `alpine`, `archlinux`) _REQUIRED_
+      1. Specify one of the linux distros supported by the script: (`ubuntu`, `fedora`, `alpine`, `archlinux`, `opensuse-tumbleweed`) _REQUIRED_
       2. Specify a mode: (`build-all` (default), `build-dependencies`) _OPTIONAL_
       
       Example:
@@ -358,12 +374,16 @@ Do **not** use GitHub's "Download Zip" option, as it does not contain submodules
       - This creates `CMakeSettings.json`
    4. Add the following variables to `CMakeSettings.json`:
       - To `cmakeCommandArgs`, add: `-DCMAKE_TOOLCHAIN_FILE=vcpkg\scripts\buildsystems\vcpkg.cmake`
-      - If you're running a 64-bit platform, you need to set the compilation to 32-bit by setting `inheritEnvironments` to `[ "msvc_x86_x64" ]`
       - Note: Visual Studio automatically escapes and turns each `\` into `\\`
    5. After letting Visual Studio re-run CMake configure with the new settings, you can build using the **CMake** menu.
 
 ### macOS
 See [macosx/README.md](macosx/README.md)
+
+### Videos
+You can download videos from [here](https://github.com/Warzone2100/wz-sequences/releases/tag/v3), or [here](https://sourceforge.net/projects/warzone2100/files/warzone2100/Videos/). You will
+need to rename the downloaded file to `sequences.wz`, and place it into your Warzone directory, as described above.
+Note that `.wz` files are just `.zip` in disguise, you can rename it and extract the content if wish to inspect them.
 
 Licensing
 -------------------

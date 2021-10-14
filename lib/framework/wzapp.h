@@ -75,7 +75,8 @@ video_backend wzGetDefaultGfxBackendForCurrentSystem();
 void wzGetGameToRendererScaleFactor(float *horizScaleFactor, float *vertScaleFactor);
 void wzMainEventLoop();
 void wzPumpEventsWhileLoading();
-void wzQuit();              ///< Quit game
+void wzQuit(int exitCode);              ///< Quit game
+int wzGetQuitExitCode();
 void wzShutdown();
 std::vector<WINDOW_MODE> wzSupportedWindowModes();
 WINDOW_MODE wzGetNextWindowMode(WINDOW_MODE currentMode);
@@ -117,6 +118,10 @@ void wzDelay(unsigned int delay);	//delay in ms
 void StartTextInput(void* pTextInputRequester);
 void StopTextInput(void* pTextInputResigner);
 bool isInTextInputMode();
+
+// NOTE: wzBackendAttemptOpenURL should *not* be called directly - instead, call openURLInBrowser() from urlhelpers.h
+bool wzBackendAttemptOpenURL(const char *url);
+
 // Thread related
 WZ_THREAD *wzThreadCreate(int (*threadFunc)(void *), void *data);
 unsigned long wzThreadID(WZ_THREAD *thread);
@@ -146,7 +151,11 @@ inline void wzAsyncExecOnMainThread(const std::function<void ()> &execFunc)
 	// receiver handles deleting the parameter on the main thread after doExecOnMainThread() has been called
 }
 
-#if !defined(WZ_CC_MINGW)
+#if !defined(HAVE_STD_THREAD)
+# define HAVE_STD_THREAD 0
+#endif
+
+#if !defined(WZ_CC_MINGW) || HAVE_STD_THREAD
 
 #include <mutex>
 #include <future>

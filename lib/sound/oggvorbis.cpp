@@ -31,6 +31,10 @@
 #define OGG_ENDIAN 0
 #endif
 
+#if defined(__clang__)
+	#pragma clang diagnostic ignored "-Wshorten-64-to-32" // FIXME!!
+#endif
+
 #include "oggvorbis.h"
 
 struct OggVorbisDecoderState
@@ -303,7 +307,7 @@ soundDataBuffer *sound_DecodeOggVorbis(struct OggVorbisDecoderState *decoder, si
 	buffer = (soundDataBuffer *)malloc(bufferSize + sizeof(soundDataBuffer));
 	if (buffer == nullptr)
 	{
-		debug(LOG_ERROR, "couldn't allocate memory (%lu bytes requested)", (unsigned long) bufferSize + sizeof(soundDataBuffer));
+		debug(LOG_ERROR, "couldn't allocate memory (%zu bytes requested)", bufferSize + sizeof(soundDataBuffer));
 		return nullptr;
 	}
 

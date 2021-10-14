@@ -33,6 +33,8 @@
 #include "lib/ivis_opengl/pieblitfunc.h"
 #include "lib/ivis_opengl/piepalette.h"
 
+#include <array>
+
 #define WZ_FORM_MINIMIZED_LEFT_PADDING 5
 #define WZ_FORM_MINIMIZED_MAXBUTTON_RIGHT_PADDING WZ_FORM_MINIMIZED_LEFT_PADDING
 
@@ -105,8 +107,6 @@ bool W_FORM::isUserMovable() const
 
 void W_FORM::clicked(W_CONTEXT *psContext, WIDGET_KEY key)
 {
-	// Stop the tip if there is one.
-	tipStop(this);
 	dirty = true;
 	if (isUserMovable() && key == WKEY_PRIMARY)
 	{
@@ -219,16 +219,6 @@ void W_CLICKFORM::highlight(W_CONTEXT *psContext)
 {
 	state |= WBUT_HIGHLIGHT;
 
-	// If there is a tip string start the tool tip.
-	auto tip = getTip();
-	if (!tip.empty())
-	{
-		if (auto lockedScreen = screenPointer.lock())
-		{
-			tipStart(this, tip, lockedScreen->TipFontID, x() + psContext->xOffset, y() + psContext->yOffset, width(), height());
-		}
-	}
-
 	if (AudioCallback != nullptr)
 	{
 		AudioCallback(HilightAudioID);
@@ -239,8 +229,6 @@ void W_CLICKFORM::highlight(W_CONTEXT *psContext)
 /* Respond to the mouse moving off a form */
 void W_FORM::highlightLost()
 {
-	// Clear the tool tip if there is one.
-	tipStop(this);
 	dirty = true;
 }
 
@@ -482,13 +470,51 @@ void W_FULLSCREENOVERLAY_CLICKFORM::clicked(W_CONTEXT *psContext, WIDGET_KEY key
 
 void W_FULLSCREENOVERLAY_CLICKFORM::display(int xOffset, int yOffset)
 {
+	if (!visible())
+	{
+		// skip if hidden
+		return;
+	}
+
 	if (backgroundColor.rgba == 0)
 	{
 		return;
 	}
+
 	int x0 = x() + xOffset;
 	int y0 = y() + yOffset;
-	pie_UniTransBoxFill(x0, y0, x0 + width(), y0 + height(), backgroundColor);
+
+	auto strongCutoutWidget = cutoutWidget.lock();
+	WzRect screenRect = screenGeometry();
+	WzRect cutoutRect = (strongCutoutWidget) ? screenRect.intersectionWith(strongCutoutWidget->screenGeometry()) : WzRect();
+
+	if (cutoutRect.width() <= 0 || cutoutRect.height() <= 0)
+	{
+		// simple path - draw background over everything
+		pie_UniTransBoxFill(x0, y0, x0 + width(), y0 + height(), backgroundColor);
+	}
+	else
+	{
+		std::array<WzRect, 4> surroundingRects = {
+			// left column until left edge of cutout rect
+			WzRect({screenRect.left(), screenRect.top()}, {cutoutRect.left(), screenRect.bottom()}),
+			// top band above cutout rect
+			WzRect({cutoutRect.left(), screenRect.top()}, {cutoutRect.right(), cutoutRect.top()}),
+			// right column after cutout rect
+			WzRect({cutoutRect.right(), screenRect.top()}, {screenRect.right(), screenRect.bottom()}),
+			// bottom band below cutout rect
+			WzRect({cutoutRect.left(), cutoutRect.bottom()}, {cutoutRect.right(), screenRect.bottom()})
+		};
+
+		for (const auto& rect : surroundingRects)
+		{
+			if (rect.width() <= 0 || rect.height() <= 0)
+			{
+				continue;
+			}
+			pie_UniTransBoxFill(rect.left(), rect.top(), rect.right(), rect.bottom(), backgroundColor);
+		}
+	}
 }
 
 void W_FULLSCREENOVERLAY_CLICKFORM::run(W_CONTEXT *psContext)
@@ -501,4 +527,27 @@ void W_FULLSCREENOVERLAY_CLICKFORM::run(W_CONTEXT *psContext)
 		}
 	}
 	inputLoseFocus();	// clear the input buffer.
+}
+
+void displayChildDropShadows(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
+{
+	PIELIGHT dropShadowColor = pal_RGBA(0, 0, 0, 40);
+	const int widerPadding = 4;
+	const int closerPadding = 2;
+	int childXOffset = psWidget->x() + xOffset;
+	int childYOffset = psWidget->y() + yOffset;
+	for (auto& child : psWidget->children())
+	{
+		if (!child->visible()) { continue; }
+		int childX0 = child->x() + childXOffset;
+		int childY0 = child->y() + childYOffset;
+		int childDropshadowWiderX0 = std::max(childX0 - widerPadding, 0);
+		int childDropshadowWiderX1 = std::min(childX0 + child->width() + widerPadding, pie_GetVideoBufferWidth());
+		int childDropshadowWiderY1 = std::min(childY0 + child->height() + widerPadding, pie_GetVideoBufferHeight());
+		int childDropshadowCloserX0 = std::max(childX0 - closerPadding, 0);
+		int childDropshadowCloserX1 = std::min(childX0 + child->width() + closerPadding, pie_GetVideoBufferWidth());
+		int childDropshadowCloserY1 = std::min(childY0 + child->height() + closerPadding, pie_GetVideoBufferHeight());
+		pie_UniTransBoxFill(childDropshadowWiderX0, childY0, childDropshadowWiderX1, childDropshadowWiderY1, dropShadowColor);
+		pie_UniTransBoxFill(childDropshadowCloserX0, childY0, childDropshadowCloserX1, childDropshadowCloserY1, dropShadowColor);
+	}
 }

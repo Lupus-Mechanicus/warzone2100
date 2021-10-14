@@ -53,6 +53,8 @@ static std::vector<std::vector<uint32_t> > combinations;
 template <typename T>
 static unsigned selSelectUnitsIf(unsigned player, T condition, bool onlyOnScreen)
 {
+	if (player >= MAX_PLAYERS) { return 0; }
+
 	unsigned count = 0;
 
 	selDroidDeselect(player);
@@ -130,6 +132,7 @@ static bool selDamaged(DROID *droid)
 unsigned int selDroidDeselect(unsigned int player)
 {
 	unsigned int count = 0;
+	if (player >= MAX_PLAYERS) { return 0; }
 
 	for (DROID *psDroid = apsDroidLists[player]; psDroid; psDroid = psDroid->psNext)
 	{
@@ -148,6 +151,7 @@ unsigned int selDroidDeselect(unsigned int player)
 unsigned int selNumSelected(unsigned int player)
 {
 	unsigned int count = 0;
+	if (player >= MAX_PLAYERS) { return 0; }
 
 	for (DROID *psDroid = apsDroidLists[player]; psDroid; psDroid = psDroid->psNext)
 	{
@@ -218,6 +222,8 @@ static unsigned int selSelectAllSame(unsigned int player, bool bOnScreen)
 
 	combinations.clear();
 
+	if (player >= MAX_PLAYERS) { return 0; }
+
 	// find out which units will need to be compared to which component combinations
 	for (DROID *psDroid = apsDroidLists[player]; psDroid; psDroid = psDroid->psNext)
 	{
@@ -267,6 +273,8 @@ void selNextSpecifiedUnit(DROID_TYPE unitType)
 	static DROID *psOldRD = nullptr; // pointer to last selected repair unit
 	DROID *psResult = nullptr, *psFirst = nullptr;
 	bool bLaterInList = false;
+
+	ASSERT_OR_RETURN(, selectedPlayer < MAX_PLAYERS, "invalid selectedPlayer: %" PRIu32 "", selectedPlayer);
 
 	for (DROID *psCurr = apsDroidLists[selectedPlayer]; psCurr && !psResult; psCurr = psCurr->psNext)
 	{
@@ -372,6 +380,8 @@ void selNextUnassignedUnit()
 	DROID *psResult = nullptr, *psFirst = nullptr;
 	bool bLaterInList = false;
 
+	ASSERT_OR_RETURN(, selectedPlayer < MAX_PLAYERS, "invalid selectedPlayer: %" PRIu32 "", selectedPlayer);
+
 	for (DROID *psCurr = apsDroidLists[selectedPlayer]; psCurr && !psResult; psCurr = psCurr->psNext)
 	{
 		/* Only look at unselected ones */
@@ -438,6 +448,8 @@ void selNextSpecifiedBuilding(STRUCTURE_TYPE structType, bool jump)
 {
 	STRUCTURE *psResult = nullptr, *psOldStruct = nullptr, *psFirst = nullptr;
 	bool bLaterInList = false;
+
+	ASSERT_OR_RETURN(, selectedPlayer < MAX_PLAYERS, "invalid selectedPlayer: %" PRIu32 "", selectedPlayer);
 
 	/* Firstly, start coughing if the type is invalid */
 	ASSERT(structType <= NUM_DIFF_BUILDINGS, "Invalid structure type %u", structType);
@@ -516,6 +528,8 @@ static bool droidIsCommanderNum(DROID *psDroid, SDWORD n)
 // select the n'th command droid
 void selCommander(int n)
 {
+	ASSERT_OR_RETURN(, selectedPlayer < MAX_PLAYERS, "invalid selectedPlayer: %" PRIu32 "", selectedPlayer);
+
 	for (DROID *psCurr = apsDroidLists[selectedPlayer]; psCurr; psCurr = psCurr->psNext)
 	{
 		if (droidIsCommanderNum(psCurr, n))
@@ -557,6 +571,8 @@ void selCommander(int n)
    */
 unsigned int selDroidSelection(unsigned int player, SELECTION_CLASS droidClass, SELECTIONTYPE droidType, bool bOnScreen)
 {
+	if (player >= MAX_PLAYERS) { return 0; }
+
 	/* So far, we haven't selected any */
 	unsigned int retVal = 0;
 

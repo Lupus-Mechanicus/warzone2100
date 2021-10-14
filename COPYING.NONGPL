@@ -51,8 +51,16 @@ data/base/components/prop/prhlwhl1.pie
 data/base/images/notifications/connect_wait.png
 data/base/images/notifications/exclamation_triangle.png
 data/base/images/notifications/shield_questionmark.png
+data/base/images/notifications/skull_crossbones.png
 data/base/images/notifications/user_questionmark.png
+data/base/images/replay/fast_forward.png
+data/base/images/replay/pause.png
+data/base/images/replay/play.png
 	- CC BY 4.0 - Font Awesome Free by @fontawesome (https://fontawesome.com/license/free)
+data/mp/multiplay/maps/2c-DustyMaze/*
+data/mp/multiplay/maps/4c-DustyMaze-2v2/*
+data/mp/multiplay/maps/4c-DustyMaze-FFA/*
+	- CC0, original work by AbcLmn18
 lib/exceptionhandler/3rdparty/StackWalker.*
 	- BSD 3-Clause License - Copyright (c) 2005 - 2017, Jochen Kalmbach (https://github.com/JochenKalmbach/StackWalker)
 lib/ivis_opengl/3rdparty/stb_image_resize.h
@@ -67,5 +75,7 @@ src/3rdparty/integer_sequence.hpp
 	- CC0, Written in 2017 by Simon Brand (@TartanLlama)
 src/3rdparty/physfs.hpp
 	- Zlib, Copyright (c) 2013 Kevin Howell and others, Copyright (c) 2018 Arthur Brainville (Ybalrid), Copyright (c) 2021 Warzone 2100 Project
+sentry-native
+	- MIT License, Copyright (c) 2019 Sentry (https://sentry.io) and individual contributors. (https://github.com/getsentry/sentry-native)
 ANGLE (libGLESv2, libEGL)
 	- BSD 3-Clause License, Copyright 2018 The ANGLE Project Authors. (https://chromium.googlesource.com/angle/angle)

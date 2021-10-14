@@ -11,16 +11,16 @@ cmake_minimum_required(VERSION 3.5)
 ########################################################
 
 # To ensure reproducible builds, pin to a specific vcpkg commit
-set(VCPKG_COMMIT_SHA "030cfaa24de9ea1bbf0a4d9c615ce7312ba77af1")
+set(VCPKG_COMMIT_SHA "5bb0c7fc45da94844dfac35c8e441758e03e7666")
 
 # WZ minimum supported macOS deployment target (this is 10.10 because of Qt 5.9.x)
 set(MIN_SUPPORTED_MACOSX_DEPLOYMENT_TARGET "10.10")
 
 # Vulkan SDK
-set(VULKAN_SDK_VERSION "1.2.170.0")
+set(VULKAN_SDK_VERSION "1.2.189.0")
 set(VULKAN_SDK_DL_FILENAME "vulkansdk-macos-${VULKAN_SDK_VERSION}.dmg")
 set(VULKAN_SDK_DL_URL "https://sdk.lunarg.com/sdk/download/${VULKAN_SDK_VERSION}/mac/${VULKAN_SDK_DL_FILENAME}?Human=true")
-set(VULKAN_SDK_DL_SHA256 "5c7264a66c57918f617d2b62dc062fd8c0a671915819b4c9420cd431e7808729")
+set(VULKAN_SDK_DL_SHA256 "0e2f9bf489988211480e0530299096cdfa2650ee120337417cd8f439592abd68")
 
 ########################################################
 
@@ -60,9 +60,12 @@ set(_HAS_VULKAN_SDK FALSE)
 
 if((CMAKE_HOST_SYSTEM_NAME MATCHES "^Darwin$") AND (DARWIN_VERSION VERSION_GREATER_EQUAL "18.0"))
 
+	if(DEFINED ENV{GITHUB_ACTIONS} AND "$ENV{GITHUB_ACTIONS}" STREQUAL "true")
+		execute_process(COMMAND ${CMAKE_COMMAND} -E echo "::group::Download Vulkan SDK")
+	endif()
 	execute_process(COMMAND ${CMAKE_COMMAND} -E echo "++ Download Vulkan SDK...")
 
-	set(_vulkan_sdk_out_dir "vulkansdk-macos")
+	set(_vulkan_sdk_out_dir "vulkansdk-macos-dl")
 
 	execute_process(
 		COMMAND ${CMAKE_COMMAND}
@@ -77,10 +80,53 @@ if((CMAKE_HOST_SYSTEM_NAME MATCHES "^Darwin$") AND (DARWIN_VERSION VERSION_GREAT
 	if(NOT _exstatus EQUAL 0)
 		message(FATAL_ERROR "Failed to download Vulkan SDK")
 	endif()
+	set(_full_vulkan_dl_path "${CMAKE_CURRENT_SOURCE_DIR}/macosx/external/${_vulkan_sdk_out_dir}")
 
+	if(DEFINED ENV{GITHUB_ACTIONS} AND "$ENV{GITHUB_ACTIONS}" STREQUAL "true")
+		execute_process(COMMAND ${CMAKE_COMMAND} -E echo "::endgroup::")
+	endif()
+
+	if(DEFINED ENV{GITHUB_ACTIONS} AND "$ENV{GITHUB_ACTIONS}" STREQUAL "true")
+		execute_process(COMMAND ${CMAKE_COMMAND} -E echo "::group::Extract Vulkan SDK")
+	endif()
+	execute_process(COMMAND ${CMAKE_COMMAND} -E echo "++ Extract Vulkan SDK...")
+
+	set(_full_vulkan_install_path "${CMAKE_CURRENT_SOURCE_DIR}/macosx/external/vulkansdk-macos")
+	if(EXISTS "${_full_vulkan_install_path}/.SHA256SumLoc")
+		file(READ "${_full_vulkan_install_path}/.SHA256SumLoc" _strings_existing_sha256 ENCODING UTF-8)
+	endif()
+
+	if(NOT DEFINED _strings_existing_sha256 OR NOT _strings_existing_sha256 STREQUAL VULKAN_SDK_DL_SHA256)
+		# Not the expected version / content, or not yet extracted
+		if(EXISTS "${_full_vulkan_install_path}")
+			file(REMOVE_RECURSE "${_full_vulkan_install_path}")
+		endif()
+	endif()
+	unset(_strings_existing_sha256)
+
+	# ./InstallVulkan.app/Contents/MacOS/InstallVulkan --root ${_full_vulkan_install_path} --accept-licenses --default-answer --confirm-command install --copy_only=1
+	execute_process(
+		COMMAND ./InstallVulkan.app/Contents/MacOS/InstallVulkan
+				--root ${_full_vulkan_install_path}
+				--accept-licenses
+				--default-answer
+				--confirm-command install
+				copy_only=1
+		WORKING_DIRECTORY "${_full_vulkan_dl_path}"
+		RESULT_VARIABLE _exstatus
+	)
+	if(NOT _exstatus EQUAL 0)
+		message(FATAL_ERROR "Failed to extract Vulkan SDK (exit code: ${_exstatus})")
+	endif()
+
+	file(WRITE "${_full_vulkan_install_path}/.SHA256SumLoc" "${VULKAN_SDK_DL_SHA256}")
+
+	if(DEFINED ENV{GITHUB_ACTIONS} AND "$ENV{GITHUB_ACTIONS}" STREQUAL "true")
+		execute_process(COMMAND ${CMAKE_COMMAND} -E echo "::endgroup::")
+	endif()
 
 	# Set VULKAN_SDK environment variable, so vcpkg and CMake pick up the appropriate location
-	set(ENV{VULKAN_SDK} "${CMAKE_CURRENT_SOURCE_DIR}/macosx/external/${_vulkan_sdk_out_dir}/macOS")
+	set(ENV{VULKAN_SDK} "${_full_vulkan_install_path}/macOS")
 	message(STATUS "VULKAN_SDK=$ENV{VULKAN_SDK}")
 	if(NOT IS_DIRECTORY "$ENV{VULKAN_SDK}")
 		message(FATAL_ERROR "Something went wrong - expected Vulkan SDK output directory does not exist: $ENV{VULKAN_SDK}")

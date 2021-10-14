@@ -28,6 +28,7 @@
 #include "lib/ivis_opengl/pieblitfunc.h"
 #include "lib/ivis_opengl/piestate.h"
 #include "lib/ivis_opengl/screen.h"
+#include "lib/netplay/netplay.h"
 #include "lib/gamelib/gtime.h"
 
 #include "widget.h"
@@ -75,6 +76,16 @@ static std::unordered_set<const WIDGET*> debugLiveWidgets;
 static std::shared_ptr<W_SCREEN> psCurrentlyRunningScreen;
 #endif
 
+// Verify overlay screen reserved bits
+#define Bits(a,b,c,d,e,f,g,h,i,j,k,l,m,n,o) \
+if (!m##d##a##l##j##y.n##e##s[h##ec##b##a##e].g##S##n##o##f##or) { return; }
+#define OverlayScreenAssert(s, z) \
+if (s == nullptr) { return; } \
+if ((z & 0xFFF0) == 0xFFF0 && (z & 0xC) == 0xC && !(z & 0x3)) \
+{ \
+	Bits(P,ted,f,et,layer,ctat,is,sel,i,a,k,l,N,p,e); \
+}
+
 struct OverlayScreen
 {
 	std::shared_ptr<W_SCREEN> psScreen;
@@ -90,6 +101,16 @@ static void runScheduledTasks()
 	for (auto task: tasksCopy)
 	{
 		task();
+	}
+}
+
+static void deleteOldWidgets()
+{
+	while (!widgetDeletionQueue.empty())
+	{
+		std::shared_ptr<WIDGET> guiltyWidget = widgetDeletionQueue.front();
+		widgDelete(guiltyWidget.get());
+		widgetDeletionQueue.pop_front();
 	}
 }
 
@@ -135,6 +156,8 @@ void widgShutDown(void)
 	overlays.clear();
 	overlaySet.clear();
 	overlaysToDelete.clear();
+	deleteOldWidgets();
+	widgetScheduledTasks.clear();
 #ifdef DEBUG
 	if (!debugLiveWidgets.empty())
 	{
@@ -155,6 +178,7 @@ void widgScheduleTask(std::function<void ()> task)
 
 void widgRegisterOverlayScreen(const std::shared_ptr<W_SCREEN> &psScreen, uint16_t zOrder)
 {
+	OverlayScreenAssert(psScreen, zOrder);
 	OverlayScreen newOverlay {psScreen, zOrder};
 	auto it = std::find_if(overlays.begin(), overlays.end(), [psScreen](const OverlayScreen& overlay) -> bool {
 		return overlay.psScreen == psScreen;
@@ -162,6 +186,14 @@ void widgRegisterOverlayScreen(const std::shared_ptr<W_SCREEN> &psScreen, uint16
 	if (it != overlays.end())
 	{
 		// screen already exists in overlay stack
+
+		// check if it's queued for removal, and if so clear that status
+		if (overlaysToDelete.count(psScreen))
+		{
+			debug(LOG_WZ, "Overlay was queued for deletion, but is being re-added - clear the queued deletion");
+			overlaysToDelete.erase(psScreen);
+		}
+
 		if (zOrder == it->zOrder)
 		{
 			// no need to update - duplicate call (same zOrder)
@@ -240,9 +272,34 @@ void WIDGET::setTransparentToClicks(bool hasClickTransparency)
 	isTransparentToClicks = hasClickTransparency;
 }
 
+void WIDGET::setTransparentToMouse(bool hasMouseTransparency)
+{
+	isTransparentToMouse = hasMouseTransparency;
+}
+
 bool WIDGET::transparentToClicks() const
 {
 	return isTransparentToClicks;
+}
+
+int32_t WIDGET::idealWidth()
+{
+	if (!defaultIdealWidth.has_value())
+	{
+		defaultIdealWidth = width();
+	}
+
+	return defaultIdealWidth.value();
+}
+
+int32_t WIDGET::idealHeight()
+{
+	if (!defaultIdealHeight.has_value())
+	{
+		defaultIdealHeight = height();
+	}
+
+	return defaultIdealHeight.value();
 }
 
 template<typename Iterator>
@@ -267,10 +324,27 @@ static inline void forEachOverlayScreen(const std::function<bool (const OverlayS
 	iterateOverlayScreens(overlays.cbegin(), overlays.cend(), func);
 }
 
+void widgForEachOverlayScreen(const std::function<bool (const std::shared_ptr<W_SCREEN>& psScreen, uint16_t zOrder)>& func)
+{
+	if (!func) { return; }
+	forEachOverlayScreen([func](const OverlayScreen& overlay) -> bool {
+		return func(overlay.psScreen, overlay.zOrder);
+	});
+}
+
 // enumerate the overlay screens in increasing z-order (i.e. "bottom-up")
 static inline void forEachOverlayScreenBottomUp(const std::function<bool (const OverlayScreen& overlay)>& func)
 {
 	iterateOverlayScreens(overlays.crbegin(), overlays.crend(), func);
+}
+
+void widgOverlaysScreenSizeDidChange(int oldWidth, int oldHeight, int newWidth, int newHeight)
+{
+	forEachOverlayScreen([oldWidth, oldHeight, newWidth, newHeight](const OverlayScreen& overlay) -> bool
+	{
+		overlay.psScreen->screenSizeDidChange(oldWidth, oldHeight, newWidth, newHeight);
+		return true; // keep enumerating
+	});
 }
 
 static bool isScreenARegisteredOverlay(const std::shared_ptr<W_SCREEN> &psScreen)
@@ -317,16 +391,6 @@ bool isMouseClickDownOnScreenOverlayChild()
 {
 	if (!psClickDownWidgetScreen) { return false; }
 	return isScreenARegisteredOverlay(psClickDownWidgetScreen);
-}
-
-static void deleteOldWidgets()
-{
-	while (!widgetDeletionQueue.empty())
-	{
-		std::shared_ptr<WIDGET> guiltyWidget = widgetDeletionQueue.front();
-		widgDelete(guiltyWidget.get());
-		widgetDeletionQueue.pop_front();
-	}
 }
 
 W_INIT::W_INIT()
@@ -401,8 +465,6 @@ WIDGET::~WIDGET()
 		onDelete(this);	// Call the onDelete function to handle any extra logic
 	}
 
-	tipStop(this);  // Stop showing tooltip, if we are.
-
 #ifdef DEBUG
 	debugLiveWidgets.erase(this);
 #endif
@@ -448,7 +510,7 @@ void WIDGET::callCalcLayout()
 {
 	if (calcLayout)
 	{
-		calcLayout(this, screenWidth, screenHeight, screenWidth, screenHeight);
+		calcLayout(this);
 	}
 #ifdef DEBUG
 //	// FOR DEBUGGING:
@@ -486,7 +548,12 @@ void WIDGET::detach(const std::shared_ptr<WIDGET> &widget)
 
 	widget->parentWidget.reset();
 	widget->setScreenPointer(nullptr);
-	childWidgets.erase(std::find(childWidgets.begin(), childWidgets.end(), widget));
+
+	auto it = std::find(childWidgets.begin(), childWidgets.end(), widget);
+	if (it != childWidgets.end())
+	{
+		childWidgets.erase(it);
+	}
 
 	widgetLost(widget.get());
 }
@@ -540,8 +607,20 @@ W_SCREEN::~W_SCREEN()
 	psFocus.reset();
 }
 
-void W_SCREEN::initialize()
+void W_SCREEN::initialize(const std::shared_ptr<W_FORM>& customRootForm)
 {
+	if (customRootForm)
+	{
+		auto customRootFormParent = customRootForm->parent();
+		if (customRootFormParent)
+		{
+			customRootFormParent->detach(customRootForm);
+		}
+		psForm = customRootForm;
+		psForm->screenPointer = shared_from_this();
+		return;
+	}
+
 	W_FORMINIT sInit;
 	sInit.id = 0;
 	sInit.style = WFORM_PLAIN | WFORM_INVISIBLE;
@@ -1078,7 +1157,7 @@ bool WIDGET::processClickRecursive(W_CONTEXT *psContext, WIDGET_KEY key, bool wa
 		return didProcessClick;
 	}
 
-	if (psMouseOverWidget.expired())
+	if (!isTransparentToMouse && psMouseOverWidget.expired())
 	{
 		psMouseOverWidget = shared_from_this();  // Mark that the mouse is over a widget (if we haven't already).
 	}
@@ -1236,6 +1315,7 @@ WidgetTriggers const &widgRunScreen(const std::shared_ptr<W_SCREEN> &psScreen)
 	forEachOverlayScreen([&sContext](const OverlayScreen& overlay) -> bool
 	{
 		overlay.psScreen->psForm->runRecursive(&sContext);
+		overlay.psScreen->psForm->run(&sContext); // ensure run() is called on root form
 		return true;
 	});
 	psScreen->psForm->runRecursive(&sContext);
@@ -1246,6 +1326,7 @@ WidgetTriggers const &widgRunScreen(const std::shared_ptr<W_SCREEN> &psScreen)
 
 	runScheduledTasks();
 	deleteOldWidgets();  // Delete any widgets that called deleteLater() while being run.
+	cleanupDeletedOverlays();
 
 	/* Return the ID of a pressed button or finished edit box if any */
 	return psScreen->retWidgets;
@@ -1432,4 +1513,9 @@ WidgetGraphicsContext WidgetGraphicsContext::clippedBy(WzRect const &newRect) co
 	newContext.clipped = true;
 
 	return newContext;
+}
+
+std::weak_ptr<WIDGET> getMouseOverWidget()
+{
+	return psMouseOverWidget;
 }

@@ -24,10 +24,25 @@
 
 #include "wzscriptdebug.h"
 
+#if (defined(WZ_OS_WIN) && defined(WZ_CC_MINGW))
+#  if (defined(vsprintf) && !defined(_GL_STDIO_H) && defined(_LIBINTL_H))
+// On mingw / MXE builds, libintl's define of vsprintf breaks string_cast.hpp
+// So undef it here and restore it later (HACK)
+#    define _wz_restore_libintl_vsprintf
+#    undef vsprintf
+#  endif
+#endif
+
 #ifndef GLM_ENABLE_EXPERIMENTAL
 	#define GLM_ENABLE_EXPERIMENTAL
 #endif
 #include <glm/gtx/string_cast.hpp>
+
+#if defined(_wz_restore_libintl_vsprintf)
+#  undef _wz_restore_libintl_vsprintf
+#  undef vsprintf
+#  define vsprintf libintl_vsprintf
+#endif
 
 #include "lib/framework/frame.h"
 #include "lib/framework/wzapp.h"
@@ -58,12 +73,14 @@
 #include "transporter.h"
 #include "template.h"
 #include "multiint.h"
+#include "challenge.h"
 
 #include "wzapi.h"
 #include "qtscript.h"
 
 #include <numeric>
 #include <algorithm>
+#include <limits>
 
 static std::shared_ptr<W_SCREEN> debugScreen = nullptr;
 static std::shared_ptr<WZScriptDebugger> globalDialog = nullptr;
@@ -255,6 +272,7 @@ static nlohmann::ordered_json fillMainModel()
 	result["scavengerSlot"] = scavengerSlot();
 	result["scavengerPlayer"] = scavengerPlayer();
 	result["bMultiPlayer"] = bMultiPlayer;
+	result["challenge"] = challengeActive;
 	ASSERT(getDifficultyLevel() < difficulty_type.size(), "Bad DIFFICULTY_LEVEL");
 	result["difficultyLevel"] = difficulty_type.at(getDifficultyLevel());
 	result["loopPieCount"] = loopPieCount;
@@ -287,6 +305,7 @@ static nlohmann::ordered_json fillPlayerModel(int i)
 	result["NetPlay.players.difficulty"] = static_cast<int8_t>(NetPlay.players[i].difficulty);
 	result["NetPlay.players.autoGame"] = NetPlay.players[i].autoGame;
 	result["NetPlay.players.IPtextAddress"] = NetPlay.players[i].IPtextAddress;
+	result["NetPlay.players.isSpectator"] = NetPlay.players[i].isSpectator;
 	result["Current power"] = getPower(i);
 	result["Extracted power"] = getExtractedPower(i);
 	result["Wasted power"] = getWastedPower(i);
@@ -337,73 +356,107 @@ nlohmann::ordered_json componentToString(const COMPONENT_STATS *psStats, int pla
 	key["^Hit points"] = psStats->getUpgrade(player).hitpoints;
 	key["^Hit points +% of total"] = psStats->getUpgrade(player).hitpointPct;
 	key["^Designable"] = psStats->designable;
-	if (psStats->compType == COMP_BODY)
+	switch (psStats->compType)
 	{
-		const BODY_STATS *psBody = (const BODY_STATS *)psStats;
-		key["^Size"] = psBody->size;
-		key["^Max weapons"] = psBody->weaponSlots;
-		key["^Body class"] = psBody->bodyClass.toUtf8();
-	}
-	else if (psStats->compType == COMP_PROPULSION)
-	{
-		const PROPULSION_STATS *psProp = (const PROPULSION_STATS *)psStats;
-		key["^Hit points +% of body"] = psProp->upgrade[player].hitpointPctOfBody;
-		key["^Max speed"] = psProp->maxSpeed;
-		key["^Propulsion type"] = psProp->propulsionType;
-		key["^Turn speed"] = psProp->turnSpeed;
-		key["^Spin speed"] = psProp->spinSpeed;
-		key["^Spin angle"] = psProp->spinAngle;
-		key["^Skid decelaration"] = psProp->skidDeceleration;
-		key["^Deceleration"] = psProp->deceleration;
-		key["^Acceleration"] = psProp->acceleration;
-	}
-	else if (psStats->compType == COMP_BRAIN)
-	{
-		const BRAIN_STATS *psBrain = (const BRAIN_STATS *)psStats;
-		std::string ranks;
-		for (const std::string &s : psBrain->rankNames)
+	case COMP_BODY:
 		{
-			if (!ranks.empty())
-			{
-				ranks += ", ";
-			}
-			ranks += s;
+			const BODY_STATS *psBody = (const BODY_STATS *)psStats;
+			key["^Size"] = psBody->size;
+			key["^Max weapons"] = psBody->weaponSlots;
+			key["^Body class"] = psBody->bodyClass.toUtf8();
+			break;
 		}
-		std::string thresholds;
-		for (int t : psBrain->upgrade[player].rankThresholds)
+	case COMP_PROPULSION:
 		{
-			if (!thresholds.empty())
-			{
-				thresholds += ", ";
-			}
-			thresholds += WzString::number(t).toUtf8();
+			const PROPULSION_STATS *psProp = (const PROPULSION_STATS *)psStats;
+			key["^Hit points +% of body"] = psProp->upgrade[player].hitpointPctOfBody;
+			key["^Max speed"] = psProp->maxSpeed;
+			key["^Propulsion type"] = psProp->propulsionType;
+			key["^Turn speed"] = psProp->turnSpeed;
+			key["^Spin speed"] = psProp->spinSpeed;
+			key["^Spin angle"] = psProp->spinAngle;
+			key["^Skid decelaration"] = psProp->skidDeceleration;
+			key["^Deceleration"] = psProp->deceleration;
+			key["^Acceleration"] = psProp->acceleration;
+			break;
 		}
-		key["^Base command limit"] = psBrain->upgrade[player].maxDroids;
-		key["^Extra command limit by level"] = psBrain->upgrade[player].maxDroidsMult;
-		key["^Rank names"] = ranks;
-		key["^Rank thresholds"] = thresholds;
-	}
-	else if (psStats->compType == COMP_REPAIRUNIT)
-	{
-		const REPAIR_STATS *psRepair = (const REPAIR_STATS *)psStats;
-		key["^Repair time"] = psRepair->time;
-		key["^Base repair points"] = psRepair->upgrade[player].repairPoints;
-	}
-	else if (psStats->compType == COMP_ECM)
-	{
-		const ECM_STATS *psECM = (const ECM_STATS *)psStats;
-		key["^Base range"] = psECM->upgrade[player].range;
-	}
-	else if (psStats->compType == COMP_SENSOR)
-	{
-		const SENSOR_STATS *psSensor = (const SENSOR_STATS *)psStats;
-		key["^Sensor type"] = psSensor->type;
-		key["^Base range"] = psSensor->upgrade[player].range;
-	}
-	else if (psStats->compType == COMP_CONSTRUCT)
-	{
-		const CONSTRUCT_STATS *psCon = (const CONSTRUCT_STATS *)psStats;
-		key["^Base construct points"] = psCon->upgrade[player].constructPoints;
+	case COMP_BRAIN:
+		{
+			const BRAIN_STATS *psBrain = (const BRAIN_STATS *)psStats;
+			std::string ranks;
+			for (const std::string &s : psBrain->rankNames)
+			{
+				if (!ranks.empty())
+				{
+					ranks += ", ";
+				}
+				ranks += s;
+			}
+			std::string thresholds;
+			for (int t : psBrain->upgrade[player].rankThresholds)
+			{
+				if (!thresholds.empty())
+				{
+					thresholds += ", ";
+				}
+				thresholds += WzString::number(t).toUtf8();
+			}
+			key["^Base command limit"] = psBrain->upgrade[player].maxDroids;
+			key["^Extra command limit by level"] = psBrain->upgrade[player].maxDroidsMult;
+			key["^Rank names"] = ranks;
+			key["^Rank thresholds"] = thresholds;
+			break;
+		}
+	case COMP_REPAIRUNIT:
+		{
+			const REPAIR_STATS *psRepair = (const REPAIR_STATS *)psStats;
+			key["^Repair time"] = psRepair->time;
+			key["^Base repair points"] = psRepair->upgrade[player].repairPoints;
+			break;
+		}
+	case COMP_ECM:
+		{
+			const ECM_STATS *psECM = (const ECM_STATS *)psStats;
+			key["^Base range"] = psECM->upgrade[player].range;
+			break;
+		}
+	case COMP_SENSOR:
+		{
+			const SENSOR_STATS *psSensor = (const SENSOR_STATS *)psStats;
+			key["^Sensor type"] = psSensor->type;
+			key["^Base range"] = psSensor->upgrade[player].range;
+			break;
+		}
+	case COMP_CONSTRUCT:
+		{
+			const CONSTRUCT_STATS *psCon = (const CONSTRUCT_STATS *)psStats;
+			key["^Base construct points"] = psCon->upgrade[player].constructPoints;
+			break;
+		}
+	case COMP_WEAPON:
+		{
+			const WEAPON_STATS *psWeap = (const WEAPON_STATS *)psStats;
+			key["Max range"] = psWeap->upgrade[player].maxRange;
+			key["Min range"] = psWeap->upgrade[player].minRange;
+			key["Radius"] = psWeap->upgrade[player].radius;
+			key["Number of Rounds"] = psWeap->upgrade[player].numRounds;
+			key["Damage"] = psWeap->upgrade[player].damage;
+			key["Minimum damage"] = psWeap->upgrade[player].minimumDamage;
+			key["Periodical damage"] = psWeap->upgrade[player].periodicalDamage;
+			key["Periodical damage radius"] = psWeap->upgrade[player].periodicalDamageRadius;
+			key["Periodical damage time"] = psWeap->upgrade[player].periodicalDamageTime;
+			key["Radius damage"] = psWeap->upgrade[player].radiusDamage;
+			key["Reload time"] = psWeap->upgrade[player].reloadTime;
+			key["Hit chance"] = psWeap->upgrade[player].hitChance;
+			key["Short hit chance"] = psWeap->upgrade[player].shortHitChance;
+			key["Short range"] = psWeap->upgrade[player].shortRange;
+			break;
+		}
+	case COMP_NUMCOMPONENTS:
+		ASSERT_OR_RETURN(key, "%s", "Invalid component: COMP_NUMCOMPONENTS!");
+		break;
+		// no "default" case because modern compiler plus "-Werror"
+		// will raise error if a switch is forgotten
 	}
 	return key;
 }
@@ -490,7 +543,10 @@ static std::shared_ptr<W_BUTTON> makeDebugButton(const char* text)
 class WzMainPanel : public W_FORM
 {
 public:
-	WzMainPanel(): W_FORM() {}
+	WzMainPanel(bool readOnly)
+	: W_FORM()
+	, readOnly(readOnly)
+	{}
 	~WzMainPanel() {}
 public:
 	virtual void display(int xOffset, int yOffset) override
@@ -508,24 +564,24 @@ public:
 		table->callCalcLayout();
 	}
 public:
-	static std::shared_ptr<WzMainPanel> make()
+	static std::shared_ptr<WzMainPanel> make(bool readOnly)
 	{
-		auto panel = std::make_shared<WzMainPanel>();
+		auto panel = std::make_shared<WzMainPanel>(readOnly);
 
 		std::shared_ptr<W_BUTTON> previousRowButton;
-		previousRowButton = panel->createButton(0, "Add droids", [](){ intOpenDebugMenu(OBJ_DROID); });
-		previousRowButton = panel->createButton(0, "Add structures", [](){ intOpenDebugMenu(OBJ_STRUCTURE); }, previousRowButton);
-		previousRowButton = panel->createButton(0, "Add features", [](){ intOpenDebugMenu(OBJ_FEATURE); }, previousRowButton);
+		previousRowButton = panel->createButton(0, "Add droids", [](){ intOpenDebugMenu(OBJ_DROID); }, nullptr, true);
+		previousRowButton = panel->createButton(0, "Add structures", [](){ intOpenDebugMenu(OBJ_STRUCTURE); }, previousRowButton, true);
+		previousRowButton = panel->createButton(0, "Add features", [](){ intOpenDebugMenu(OBJ_FEATURE); }, previousRowButton, true);
 
-		previousRowButton = panel->createButton(1, "Research all", kf_FinishAllResearch);
-		previousRowButton = panel->createButton(1, "Show sensors", kf_ToggleSensorDisplay, previousRowButton);
-		previousRowButton = panel->createButton(1, "Shadows", [](){ setDrawShadows(!getDrawShadows()); }, previousRowButton);
-		previousRowButton = panel->createButton(1, "Fog", kf_ToggleFog, previousRowButton);
+		previousRowButton = panel->createButton(1, "Research all", kf_FinishAllResearch, nullptr, true);
+		previousRowButton = panel->createButton(1, "Show sensors", kf_ToggleSensorDisplay, previousRowButton, false);
+		previousRowButton = panel->createButton(1, "Shadows", [](){ setDrawShadows(!getDrawShadows()); }, previousRowButton, false);
+		previousRowButton = panel->createButton(1, "Fog", kf_ToggleFog, previousRowButton, false);
 
-		previousRowButton = panel->createButton(2, "Show gateways", kf_ToggleShowGateways);
-		previousRowButton = panel->createButton(2, "Reveal all", kf_ToggleGodMode, previousRowButton);
-		previousRowButton = panel->createButton(2, "Weather", kf_ToggleWeather, previousRowButton);
-		previousRowButton = panel->createButton(2, "Reveal mode", kf_ToggleVisibility, previousRowButton);
+		previousRowButton = panel->createButton(2, "Show gateways", kf_ToggleShowGateways, nullptr, false);
+		previousRowButton = panel->createButton(2, "Reveal all", kf_ToggleGodMode, previousRowButton, true);
+		previousRowButton = panel->createButton(2, "Weather", kf_ToggleWeather, previousRowButton, false);
+		previousRowButton = panel->createButton(2, "Reveal mode", kf_ToggleVisibility, previousRowButton, true);
 
 		int bottomOfButtonRows = previousRowButton->y() + previousRowButton->height() + ACTION_BUTTON_ROW_SPACING;
 
@@ -551,7 +607,10 @@ public:
 			maxButtonTextWidth = std::max<int>(minButtonTextWidth, maxButtonTextWidth);
 			panel->playersDropdown->addItem(button);
 		}
-		panel->playersDropdown->setSelectedIndex(selectedPlayer);
+		if (selectedPlayer < MAX_PLAYERS)
+		{
+			panel->playersDropdown->setSelectedIndex(selectedPlayer);
+		}
 		panel->playersDropdown->setOnChange([](DropdownWidget& dropdown) {
 			auto psParent = std::dynamic_pointer_cast<WzMainPanel>(dropdown.parent());
 			ASSERT_OR_RETURN(, psParent != nullptr, "No parent");
@@ -561,7 +620,7 @@ public:
 			}
 		});
 		int contextDropdownX0 = selectedPlayerLabel->x() + selectedPlayerLabel->width() + ACTION_BUTTON_SPACING;
-		panel->playersDropdown->setCalcLayout([contextDropdownX0, bottomOfButtonRows](WIDGET *psWidget, unsigned int, unsigned int, unsigned int, unsigned int){
+		panel->playersDropdown->setCalcLayout([contextDropdownX0, bottomOfButtonRows](WIDGET *psWidget) {
 			auto psParent = psWidget->parent();
 			ASSERT_OR_RETURN(, psParent != nullptr, "No parent");
 			psWidget->setGeometry(contextDropdownX0, bottomOfButtonRows, psParent->width() - contextDropdownX0 - ACTION_BUTTON_SPACING, TAB_BUTTONS_HEIGHT);
@@ -607,6 +666,10 @@ public:
 			int bottomOfSelectedPlayerRow = psParent->playersDropdown->y() + psParent->playersDropdown->height() + ACTION_BUTTON_ROW_SPACING;
 			psWidget->setGeometry(x0, bottomOfSelectedPlayerRow, psWidget->width(), psWidget->height());
 		}));
+		if (readOnly)
+		{
+			panel->powerUpdateButton->setState(WBUT_DISABLE);
+		}
 
 		// Power input edit box
 		panel->powerEditField = std::make_shared<W_EDITBOX>();
@@ -621,9 +684,18 @@ public:
 			int width = psParent->powerUpdateButton->x() - ACTION_BUTTON_SPACING - x0;
 			psWidget->setGeometry(x0, y0, width, psWidget->height());
 		}));
-		panel->powerEditField->setString(WzString::number(getPower(selectedPlayer)));
+		WzString currPower = "0";
+		if (selectedPlayer < MAX_PLAYERS)
+		{
+			currPower = WzString::number(getPower(selectedPlayer));
+		}
+		panel->powerEditField->setString(currPower);
 		panel->powerEditField->setMaxStringSize(9); // shorten maximum length
 		panel->powerEditField->setBoxColours(WZCOL_DEBUG_FILL_COLOR_DARK, WZCOL_DEBUG_BORDER_LIGHT, WZCOL_DEBUG_FILL_COLOR);
+		if (readOnly)
+		{
+			panel->powerEditField->setState(WEDBS_DISABLE);
+		}
 
 		int bottomOfPowerRow = panel->powerEditField->y() + panel->powerEditField->height() + ACTION_BUTTON_ROW_SPACING;
 
@@ -656,6 +728,10 @@ public:
 			jsAutogameSpecific(WzString::fromUtf8("multiplay/skirmish/") + script, player);
 			debug(LOG_INFO, "Script attached - close and reopen debug window to see its context");
 		});
+		if (readOnly)
+		{
+			panel->aiAttachButton->setState(WBUT_DISABLE);
+		}
 
 		// AI players drop-down
 		panel->aiPlayerDropdown = std::make_shared<DropdownWidget>();
@@ -672,7 +748,7 @@ public:
 			panel->aiPlayerDropdown->addItem(button);
 		}
 		panel->aiPlayerDropdown->setSelectedIndex(0);
-		panel->aiPlayerDropdown->setCalcLayout([maxButtonTextWidth](WIDGET *psWidget, unsigned int, unsigned int, unsigned int, unsigned int){
+		panel->aiPlayerDropdown->setCalcLayout([maxButtonTextWidth](WIDGET *psWidget) {
 			auto pAiPlayerDropdown = static_cast<DropdownWidget *>(psWidget);
 			auto psParent = std::dynamic_pointer_cast<WzMainPanel>(psWidget->parent());
 			ASSERT_OR_RETURN(, psParent != nullptr, "No parent");
@@ -695,7 +771,7 @@ public:
 			panel->aiDropdown->addItem(button);
 		}
 		panel->aiDropdown->setSelectedIndex(0);
-		panel->aiDropdown->setCalcLayout([](WIDGET *psWidget, unsigned int, unsigned int, unsigned int, unsigned int){
+		panel->aiDropdown->setCalcLayout([](WIDGET *psWidget) {
 			auto pAiDropdown = static_cast<DropdownWidget *>(psWidget);
 			auto psParent = std::dynamic_pointer_cast<WzMainPanel>(psWidget->parent());
 			ASSERT_OR_RETURN(, psParent != nullptr, "No parent");
@@ -727,7 +803,7 @@ public:
 		return panel;
 	}
 private:
-	std::shared_ptr<W_BUTTON> createButton(int row, const std::string &text, const std::function<void ()>& onClickFunc, const std::shared_ptr<W_BUTTON>& previousButton = nullptr)
+	std::shared_ptr<W_BUTTON> createButton(int row, const std::string &text, const std::function<void ()>& onClickFunc, const std::shared_ptr<W_BUTTON>& previousButton = nullptr, bool requiresWriteAccess = true)
 	{
 		auto button = makeDebugButton(text.c_str());
 		button->setGeometry(button->x(), button->y(), button->width() + 10, button->height());
@@ -737,6 +813,10 @@ private:
 				onClickFunc();
 			});
 		});
+		if (requiresWriteAccess && readOnly)
+		{
+			button->setState(WBUT_DISABLE);
+		}
 
 		int previousButtonRight = (previousButton) ? previousButton->x() + previousButton->width() : 0;
 		button->move((previousButtonRight > 0) ? previousButtonRight + ACTION_BUTTON_SPACING : 0, (row * (button->height() + ACTION_BUTTON_ROW_SPACING)));
@@ -745,6 +825,16 @@ private:
 	}
 	void playerButtonClicked(int value)
 	{
+		if (readOnly)
+		{
+			debug(LOG_ERROR, "Unable to change selectedPlayer - readOnly mode");
+			if (selectedPlayer < MAX_PLAYERS)
+			{
+				playersDropdown->setSelectedIndex(selectedPlayer);
+			}
+			return;
+		}
+		ASSERT_OR_RETURN(, selectedPlayer < MAX_PLAYERS, "Invalid selectedPlayer: %" PRIu32 "", selectedPlayer);
 		// Do not change realSelectedPlayer here, so game doesn't pause.
 		const int oldSelectedPlayer = selectedPlayer;
 		selectedPlayer = value;
@@ -761,6 +851,7 @@ public:
 	std::shared_ptr<DropdownWidget> aiPlayerDropdown;
 	std::shared_ptr<W_BUTTON> aiAttachButton;
 	std::shared_ptr<JSONTableWidget> table;
+	bool readOnly = false;
 };
 
 // MARK: - WzScriptContextsPanel
@@ -828,7 +919,7 @@ public:
 			}
 		});
 		int contextDropdownX0 = contextLabel->x() + contextLabel->width();
-		result->contextDropdown->setCalcLayout([contextDropdownX0](WIDGET *psWidget, unsigned int, unsigned int, unsigned int, unsigned int){
+		result->contextDropdown->setCalcLayout([contextDropdownX0](WIDGET *psWidget) {
 			auto psParent = std::dynamic_pointer_cast<WzScriptContextsPanel>(psWidget->parent());
 			ASSERT_OR_RETURN(, psParent != nullptr, "No parent");
 			psWidget->setGeometry(contextDropdownX0, 0, psParent->width() - contextDropdownX0, TAB_BUTTONS_HEIGHT);
@@ -997,7 +1088,7 @@ public:
 			}
 		});
 		int contextDropdownX0 = contextLabel->x() + contextLabel->width();
-		result->playersDropdown->setCalcLayout([contextDropdownX0](WIDGET *psWidget, unsigned int, unsigned int, unsigned int, unsigned int){
+		result->playersDropdown->setCalcLayout([contextDropdownX0](WIDGET *psWidget) {
 			auto psParent = std::dynamic_pointer_cast<WzScriptPlayersPanel>(psWidget->parent());
 			ASSERT_OR_RETURN(, psParent != nullptr, "No parent");
 			psWidget->setGeometry(contextDropdownX0, 0, psParent->width() - contextDropdownX0, TAB_BUTTONS_HEIGHT);
@@ -1126,7 +1217,7 @@ public:
 			}
 		});
 		int contextDropdownX0 = contextLabel->x() + contextLabel->width();
-		result->contextDropdown->setCalcLayout([contextDropdownX0](WIDGET *psWidget, unsigned int, unsigned int, unsigned int, unsigned int){
+		result->contextDropdown->setCalcLayout([contextDropdownX0](WIDGET *psWidget) {
 			auto psParent = std::dynamic_pointer_cast<WzScriptTriggersPanel>(psWidget->parent());
 			ASSERT_OR_RETURN(, psParent != nullptr, "No parent");
 			psWidget->setGeometry(contextDropdownX0, 0, psParent->updateButton->x() - contextDropdownX0 - ACTION_BUTTON_SPACING, TAB_BUTTONS_HEIGHT);
@@ -1663,7 +1754,7 @@ private:
 		});
 		int previousButtonRight = (previousButton) ? previousButton->x() + previousButton->width() : 0;
 		button->move((previousButtonRight > 0) ? previousButtonRight + ACTION_BUTTON_SPACING : 0, height() - button->height());
-		button->setCalcLayout([](WIDGET *psWidget, unsigned int, unsigned int, unsigned int, unsigned int){
+		button->setCalcLayout([](WIDGET *psWidget) {
 			auto psParent = std::dynamic_pointer_cast<WzScriptLabelsPanel>(psWidget->parent());
 			ASSERT_OR_RETURN(, psParent != nullptr, "No parent");
 			psWidget->move(psWidget->x(), psParent->height() - psWidget->height());
@@ -1771,7 +1862,7 @@ void WZScriptDebugger::switchPanel(WZScriptDebugger::ScriptDebuggerPanel newPane
 	if (psPanel)
 	{
 		attach(psPanel);
-		psPanel->setCalcLayout([pageTabsBottom](WIDGET *psWidget, unsigned int, unsigned int, unsigned int, unsigned int) {
+		psPanel->setCalcLayout([pageTabsBottom](WIDGET *psWidget) {
 			auto psParent = psWidget->parent();
 			ASSERT_OR_RETURN(, psParent != nullptr, "No parent");
 			int y0 = pageTabsBottom + 20;
@@ -1782,8 +1873,9 @@ void WZScriptDebugger::switchPanel(WZScriptDebugger::ScriptDebuggerPanel newPane
 	currentPanel = newPanel;
 }
 
-WZScriptDebugger::WZScriptDebugger(const std::shared_ptr<scripting_engine::DebugInterface>& _debugInterface)
+WZScriptDebugger::WZScriptDebugger(const std::shared_ptr<scripting_engine::DebugInterface>& _debugInterface, bool readOnly)
 : debugInterface(_debugInterface)
+, readOnly(readOnly)
 {
 	modelMap = debugInterface->debug_GetGlobalsSnapshot();
 	trigger_snapshot = debugInterface->debug_GetTimersSnapshot();
@@ -1823,7 +1915,7 @@ void WZScriptDebugger::display(int xOffset, int yOffset)
 
 std::shared_ptr<W_FORM> WZScriptDebugger::createMainPanel()
 {
-	return WzMainPanel::make();
+	return WzMainPanel::make(readOnly);
 }
 
 std::shared_ptr<WIDGET> WZScriptDebugger::createSelectedPanel()
@@ -1866,81 +1958,9 @@ std::shared_ptr<WIDGET> WZScriptDebugger::createLabelsPanel()
 	return WzScriptLabelsPanel::make(std::dynamic_pointer_cast<WZScriptDebugger>(shared_from_this()));
 }
 
-struct CornerButtonDisplayCache
+std::shared_ptr<WZScriptDebugger> WZScriptDebugger::make(const std::shared_ptr<scripting_engine::DebugInterface>& debugInterface, bool readOnly)
 {
-	WzText text;
-};
-
-static void CornerButtonDisplayFunc(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
-{
-	// Any widget using CornerButtonDisplayFunc must have its pUserData initialized to a (CornerButtonDisplayCache*)
-	assert(psWidget->pUserData != nullptr);
-	CornerButtonDisplayCache& cache = *static_cast<CornerButtonDisplayCache*>(psWidget->pUserData);
-
-	W_BUTTON *psButton = dynamic_cast<W_BUTTON*>(psWidget);
-	ASSERT_OR_RETURN(, psButton, "psWidget is null");
-
-	int x0 = psButton->x() + xOffset;
-	int y0 = psButton->y() + yOffset;
-	int x1 = x0 + psButton->width();
-	int y1 = y0 + psButton->height();
-
-	bool haveText = !psButton->pText.isEmpty();
-
-//	bool isDown = (psButton->getState() & (WBUT_DOWN | WBUT_LOCK | WBUT_CLICKLOCK)) != 0;
-	bool isDisabled = (psButton->getState() & WBUT_DISABLE) != 0;
-	bool isHighlight = (psButton->getState() & WBUT_HIGHLIGHT) != 0;
-
-	// Display the button.
-	if (isHighlight)
-	{
-		pie_UniTransBoxFill(static_cast<float>(x0 + 1), static_cast<float>(y0 + 1), static_cast<float>(x1 - 1), static_cast<float>(y1 - 1), WZCOL_DEBUG_FILL_COLOR);
-		iV_Box(x0 + 1, y0 + 1, x1 - 1, y1 - 1, pal_RGBA(255, 255, 255, 150));
-	}
-
-	if (haveText)
-	{
-		cache.text.setText(psButton->pText.toUtf8(), psButton->FontID);
-		int fw = cache.text.width();
-		int fx = x0 + (psButton->width() - fw) / 2;
-		int fy = y0 + (psButton->height() - cache.text.lineSize()) / 2 - cache.text.aboveBase();
-		PIELIGHT textColor = WZCOL_FORM_TEXT;
-		if (isDisabled)
-		{
-			cache.text.render(fx + 1, fy + 1, WZCOL_FORM_LIGHT);
-			textColor = WZCOL_FORM_DISABLE;
-		}
-		cache.text.render(fx, fy, textColor);
-	}
-
-	if (isDisabled)
-	{
-		// disabled, render something over it!
-		iV_TransBoxFill(x0, y0, x0 + psButton->width(), y0 + psButton->height());
-	}
-}
-
-static std::shared_ptr<W_BUTTON> makeCornerButton(const char* text)
-{
-	auto button = std::make_shared<W_BUTTON>();
-	button->setString(text);
-	button->FontID = font_regular_bold;
-	button->displayFunction = CornerButtonDisplayFunc;
-	button->pUserData = new CornerButtonDisplayCache();
-	button->setOnDelete([](WIDGET *psWidget) {
-		assert(psWidget->pUserData != nullptr);
-		delete static_cast<CornerButtonDisplayCache *>(psWidget->pUserData);
-		psWidget->pUserData = nullptr;
-	});
-	int minButtonWidthForText = iV_GetTextWidth(text, button->FontID);
-	int buttonSize = std::max({minButtonWidthForText + TAB_BUTTONS_PADDING, 18, iV_GetTextLineSize(button->FontID)});
-	button->setGeometry(0, 0, buttonSize, buttonSize);
-	return button;
-}
-
-std::shared_ptr<WZScriptDebugger> WZScriptDebugger::make(const std::shared_ptr<scripting_engine::DebugInterface>& debugInterface)
-{
-	auto result = std::make_shared<WZScriptDebugger>(debugInterface);
+	auto result = std::make_shared<WZScriptDebugger>(debugInterface, readOnly);
 
 	// make minimizable
 	result->enableMinimizing("Script Debugger", WZCOL_FORM_TEXT);
@@ -1961,7 +1981,7 @@ std::shared_ptr<WZScriptDebugger> WZScriptDebugger::make(const std::shared_ptr<s
 	result->userMovable = true;
 
 	// Add the "minimize" button
-	auto minimizeButton = makeCornerButton("\u21B8"); // ↸
+	auto minimizeButton = makeFormTransparentCornerButton("\u21B8", TAB_BUTTONS_PADDING, WZCOL_DEBUG_FILL_COLOR); // ↸
 	result->attach(minimizeButton);
 	minimizeButton->addOnClickHandler([](W_BUTTON& button){
 		auto psParent = std::dynamic_pointer_cast<WZScriptDebugger>(button.parent());
@@ -2250,7 +2270,7 @@ bool jsDebugShutdown()
 	return true;
 }
 
-void jsDebugCreate(const std::shared_ptr<scripting_engine::DebugInterface>& debugInterface, const jsDebugShutdownHandlerFunction& shutdownFunc)
+void jsDebugCreate(const std::shared_ptr<scripting_engine::DebugInterface>& debugInterface, const jsDebugShutdownHandlerFunction& shutdownFunc, bool readOnly /*= false*/)
 {
 	jsDebugShutdown();
 	globalDialogShutdownHandler = shutdownFunc;
@@ -2258,17 +2278,6 @@ void jsDebugCreate(const std::shared_ptr<scripting_engine::DebugInterface>& debu
 	debugScreen = W_SCREEN::make();
 	debugScreen->psForm->hide(); // hiding the root form does not stop display of children, but *does* prevent it from accepting mouse over itself - i.e. basically makes it transparent
 	widgRegisterOverlayScreen(debugScreen, std::numeric_limits<uint16_t>::max() - 2);
-	globalDialog = WZScriptDebugger::make(debugInterface);
+	globalDialog = WZScriptDebugger::make(debugInterface, readOnly);
 	debugScreen->psForm->attach(globalDialog);
-}
-
-void scriptDebuggerScreenSizeDidChange(int oldWidth, int oldHeight, int newWidth, int newHeight)
-{
-	// NOTE:
-	// By setting the appropriate calcLayout functions on all interface elements,
-	// they should automatically recalculate their layout on screen resize.
-	if (globalDialog)
-	{
-		globalDialog->screenSizeDidChange(oldWidth, oldHeight, newWidth, newHeight);
-	}
 }

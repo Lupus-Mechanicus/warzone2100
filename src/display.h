@@ -26,6 +26,8 @@
 
 #include "basedef.h"
 #include "structure.h"
+#include "input/manager.h"
+#include "input/keyconfig.h"
 #include <glm/fwd.hpp>
 
 /* Initialise the display system */
@@ -33,6 +35,9 @@ bool dispInitialise();
 
 /* Initialize fade-in transition */
 bool transitionInit();
+
+extern InputManager gInputManager;
+extern KeyFunctionConfiguration gKeyFuncConfig;
 
 void ProcessRadarInput();
 
@@ -200,7 +205,7 @@ bool	getRotActive();
 #define MINDISTANCE	(0)
 #define MINDISTANCE_CONFIG (1600)
 #define MAP_ZOOM_CONFIG_STEP (200)
-#define STARTDISTANCE	(2500)
+#define STARTDISTANCE	(2600)
 #define OLD_START_HEIGHT (1500) // only used in savegames <= 10
 
 #define CAMERA_PIVOT_HEIGHT (500)

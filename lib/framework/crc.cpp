@@ -97,6 +97,12 @@ Sha256 sha256Sum(void const *data, size_t dataLen)
 	static_assert(Sha256::Bytes == crypto_hash_sha256_BYTES, "Size mismatch.");
 
 	Sha256 ret;
+	if (data == nullptr)
+	{
+		ASSERT(data != nullptr, "Called with null data pointer");
+		ret.setZero();
+		return ret;
+	}
 #if SIZE_MAX > ULLONG_MAX
 	if (dataLen > std::numeric_limits<unsigned long long>::max())
 	{
@@ -128,17 +134,22 @@ void Sha256::setZero()
 	memset(bytes, 0x00, Bytes);
 }
 
-std::string Sha256::toString() const
+static inline std::string bytesToHex(const uint8_t* bytes, size_t numBytes)
 {
 	std::string str;
-	str.resize(Bytes * 2);
+	str.resize(numBytes * 2);
 	char const *hexDigits = "0123456789abcdef";
-	for (int n = 0; n < Bytes; ++n)
+	for (size_t n = 0; n < numBytes; ++n)
 	{
 		str[n * 2    ] = hexDigits[bytes[n] >> 4];
 		str[n * 2 + 1] = hexDigits[bytes[n] & 15];
 	}
 	return str;
+}
+
+std::string Sha256::toString() const
+{
+	return bytesToHex(bytes, Bytes);
 }
 
 void Sha256::fromString(std::string const &s)
@@ -319,7 +330,6 @@ bool EcKey::verify(Sig const &sig, void const *data, size_t dataLen) const
 	int verifyResult = crypto_sign_ed25519_verify_detached(&sig[0], (const unsigned char *)data, static_cast<unsigned long long>(dataLen), &(EC_KEY_CAST(vKey)->publicKey[0]));
 	if (verifyResult != 0)
 	{
-		debug(LOG_ERROR, "Invalid signature");
 		return false;
 	}
 
@@ -417,10 +427,29 @@ EcKey EcKey::generate()
 	return ret;
 }
 
-std::string EcKey::publicHashString() const
+std::string EcKey::publicHashString(size_t truncateToLength /*= 0*/) const
 {
 	auto bytes = toBytes(EcKey::Public);
-	return bytes.empty()? std::string{} : sha256Sum(&bytes[0], bytes.size()).toString().substr(0, 20).c_str();
+	if (bytes.empty())
+	{
+		return std::string{};
+	}
+	auto shaStr = sha256Sum(&bytes[0], bytes.size()).toString();
+	if (truncateToLength > 0 && truncateToLength < shaStr.length())
+	{
+		return shaStr.substr(0, truncateToLength);
+	}
+	return shaStr;
+}
+
+std::string EcKey::publicKeyHexString(size_t truncateToLength /*= 0*/) const
+{
+	auto bytes = toBytes(EcKey::Public);
+	if (bytes.empty())
+	{
+		return std::string{};
+	}
+	return bytesToHex(bytes.data(), bytes.size());
 }
 
 
@@ -486,6 +515,22 @@ std::vector<uint8_t> base64Decode(std::string const &str)
 	return bytes;
 }
 
+std::string b64Tob64UrlSafe(const std::string& inputb64)
+{
+	std::string b64urlsafe = inputb64;
+	std::replace(b64urlsafe.begin(), b64urlsafe.end(), '+', '-');
+	std::replace(b64urlsafe.begin(), b64urlsafe.end(), '/', '_');
+	return b64urlsafe;
+}
+
+std::string b64UrlSafeTob64(const std::string& inputb64urlsafe)
+{
+	std::string b64 = inputb64urlsafe;
+	std::replace(b64.begin(), b64.end(), '-', '+');
+	std::replace(b64.begin(), b64.end(), '_', '/');
+	return b64;
+}
+
 //================================================================================
 // MARK: - Generating Random Data
 //================================================================================
@@ -495,4 +540,10 @@ std::vector<uint8_t> genSecRandomBytes(size_t numBytes)
 	std::vector<uint8_t> result(numBytes);
 	randombytes_buf(&result[0], result.size());
 	return result;
+}
+
+void genSecRandomBytes(void * const buf, const size_t size)
+{
+	ASSERT_OR_RETURN(, buf != nullptr, "Null buffer!!");
+	randombytes_buf(buf, size);
 }

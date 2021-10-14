@@ -23,6 +23,9 @@
  *
  */
 
+#include <3rdparty/json/json.hpp> // Must come before WZ includes
+using json = nlohmann::json;
+
 #include "lib/framework/frame.h"
 #include "notifications.h"
 #include "lib/gamelib/gtime.h"
@@ -35,11 +38,9 @@
 #include "init.h"
 #include "frend.h"
 #include <algorithm>
+#include <limits>
 
 // MARK: - Notification Ignore List
-
-#include <3rdparty/json/json.hpp>
-using json = nlohmann::json;
 
 #include <typeinfo>
 #include <physfs.h>
@@ -351,33 +352,7 @@ void removeInGameNotificationForm(WZ_Queued_Notification* request);
 #endif
 #include <glm/gtx/transform.hpp>
 #include "lib/ivis_opengl/pieblitfunc.h"
-
-struct WzCheckboxButton : public W_BUTTON
-{
-public:
-	WzCheckboxButton() : W_BUTTON()
-	{
-		addOnClickHandler([](W_BUTTON& button) {
-			WzCheckboxButton& self = static_cast<WzCheckboxButton&>(button);
-			self.isChecked = !self.isChecked;
-		});
-	}
-
-	void display(int xOffset, int yOffset);
-
-	Vector2i calculateDesiredDimensions();
-
-	bool getIsChecked() const { return isChecked; }
-private:
-	int checkboxSize()
-	{
-		wzText.setText(pText.toUtf8(), FontID);
-		return wzText.lineSize() - 2;
-	}
-private:
-	WzText wzText;
-	bool isChecked = false;
-};
+#include "lib/widget/checkbox.h"
 
 static W_FORMINIT MakeNotificationFormInit()
 {
@@ -474,68 +449,6 @@ std::unique_ptr<WZ_Queued_Notification> popNextQueuedNotification()
 		++it;
 	}
 	return nullptr;
-}
-
-// MARK: - WzCheckboxButton
-
-Vector2i WzCheckboxButton::calculateDesiredDimensions()
-{
-	int cbSize = checkboxSize();
-	Vector2i checkboxPos{x(), y()};
-	int textLeftPos = checkboxPos.x + cbSize + 7;
-
-	// TODO: Incorporate padding?
-	return Vector2i(textLeftPos + wzText.width(), std::max(wzText.lineSize(), cbSize));
-}
-
-void WzCheckboxButton::display(int xOffset, int yOffset)
-{
-	wzText.setText(pText.toUtf8(), FontID);
-
-	int x0 = xOffset + x();
-	int y0 = yOffset + y();
-
-	bool down = (getState() & (WBUT_DOWN | WBUT_LOCK | WBUT_CLICKLOCK)) != 0;
-	bool grey = (getState() & WBUT_DISABLE) != 0;
-
-	// calculate checkbox dimensions
-	int cbSize = checkboxSize();
-	Vector2i checkboxOffset{0, (height() - cbSize) / 2}; // left-align, center vertically
-	Vector2i checkboxPos{x0 + checkboxOffset.x, y0 + checkboxOffset.y};
-
-	// draw checkbox border
-	PIELIGHT notifyBoxAddColor = WZCOL_NOTIFICATION_BOX;
-	notifyBoxAddColor.byte.a = uint8_t(float(notifyBoxAddColor.byte.a) * 0.7f);
-	pie_UniTransBoxFill(checkboxPos.x, checkboxPos.y, checkboxPos.x + cbSize, checkboxPos.y + cbSize, notifyBoxAddColor);
-	iV_Box2(checkboxPos.x, checkboxPos.y, checkboxPos.x + cbSize, checkboxPos.y + cbSize, WZCOL_TEXT_MEDIUM, WZCOL_TEXT_MEDIUM);
-
-	if (down || isChecked)
-	{
-		// draw checkbox "checked" inside
-		#define CB_INNER_INSET 2
-		PIELIGHT checkBoxInsideColor = WZCOL_TEXT_MEDIUM;
-		checkBoxInsideColor.byte.a = 200;
-		pie_UniTransBoxFill(checkboxPos.x + CB_INNER_INSET, checkboxPos.y + CB_INNER_INSET, checkboxPos.x + cbSize - (CB_INNER_INSET), checkboxPos.y + cbSize - (CB_INNER_INSET), checkBoxInsideColor);
-	}
-
-	if (grey)
-	{
-		// disabled, render something over it!
-		iV_TransBoxFill(x0, y0, x0 + width(), y0 + height());
-	}
-
-	// Display text to the right of the checkbox image
-	int textLeftPos = checkboxPos.x + cbSize + 7;
-	int fx = textLeftPos;
-	int fw = wzText.width();
-	int fy = yOffset + y() + (height() - wzText.lineSize()) / 2 - wzText.aboveBase();
-
-	if (style & WBUT_TXTCENTRE)							//check for centering, calculate offset.
-	{
-		fx = textLeftPos + ((width() - fw) / 2);
-	}
-
-	wzText.render(fx, fy, WZCOL_TEXT_MEDIUM);
 }
 
 // MARK: - W_NOTIFICATION
@@ -842,7 +755,7 @@ W_NOTIFICATION::~W_NOTIFICATION()
 
 gfx_api::texture* makeTexture(unsigned int width, unsigned int height, const gfx_api::pixel_format& format, const void *image)
 {
-	size_t mip_count = floor(log(std::max(width, height))) + 1;
+	size_t mip_count = static_cast<size_t>(floor(log(std::max(width, height)))) + 1;
 	gfx_api::texture* mTexture = gfx_api::context::get().create_texture(mip_count, width, height, format);
 	if (image != nullptr)
 		mTexture->upload_and_generate_mipmaps(0u, 0u, width, height, format, image);
@@ -852,6 +765,13 @@ gfx_api::texture* makeTexture(unsigned int width, unsigned int height, const gfx
 
 gfx_api::texture* W_NOTIFICATION::loadImage(const WZ_Notification_Image& image)
 {
+	return image.loadImageToTexture();
+}
+
+gfx_api::texture* WZ_Notification_Image::loadImageToTexture() const
+{
+	const WZ_Notification_Image& image = *this;
+
 	gfx_api::texture* pTexture = nullptr;
 	iV_Image ivImage;
 	if (!image.imagePath().empty())
@@ -894,7 +814,7 @@ gfx_api::texture* W_NOTIFICATION::loadImage(const WZ_Notification_Image& image)
 
 float EaseOutElastic(float p)
 {
-	return sin(-13 * M_PI_2 * (p + 1)) * pow(2, -10 * p) + 1;
+	return static_cast<float>(sin(-13 * M_PI_2 * (p + 1)) * pow(2, -10 * p) + 1);
 }
 
 float EaseOutQuint(float p)
@@ -915,6 +835,11 @@ float EaseInCubic(float p)
 
 bool W_NOTIFICATION::calculateNotificationWidgetPos()
 {
+	if (request == nullptr)
+	{
+		return false;
+	}
+
 	// center horizontally in window
 	int x = std::max<int>((screenWidth - width()) / 2, 0);
 	int y = 0; // set below
@@ -935,7 +860,7 @@ bool W_NOTIFICATION::calculateNotificationWidgetPos()
 			uint32_t endTime = startTime + uint32_t(openAnimationDuration);
 			if (realTime < endTime)
 			{
-				y = (-height()) + (EaseOutQuint((float(realTime) - float(startTime)) / float(openAnimationDuration)) * (endingYPosition + height())) + 1;
+				y = static_cast<int>((-height()) + (EaseOutQuint((float(realTime) - float(startTime)) / float(openAnimationDuration)) * (endingYPosition + height())) + 1);
 				if (!(y + getDragOffset().y >= endingYPosition))
 				{
 					break;
@@ -984,7 +909,7 @@ bool W_NOTIFICATION::calculateNotificationWidgetPos()
 				{
 					percentComplete = EaseInCubic(percentComplete);
 				}
-				y = endingYPosition - (percentComplete * (endingYPosition + height()));
+				y = static_cast<int>(endingYPosition - (percentComplete * (endingYPosition + height())));
 				if ((y + getDragOffset().y) > -height())
 				{
 					break;
@@ -1041,7 +966,7 @@ void W_NOTIFICATION::run(W_CONTEXT *psContext)
 			// dragging down
 			const int verticalLimit = 10;
 			int distanceY = currMouseY - dragStartY;
-			dragOffset.y = verticalLimit * (1 + log10(float(distanceY) / float(verticalLimit)));
+			dragOffset.y = static_cast<int>(verticalLimit * (1 + log10(float(distanceY) / float(verticalLimit))));
 //			debug(LOG_GUI, "dragging down, dragOffset.y: (%d)", dragOffset.y);
 		}
 		else
@@ -1059,7 +984,7 @@ void W_NOTIFICATION::run(W_CONTEXT *psContext)
 			dragOffsetEnded = dragOffset;
 			notificationDidStopDragOnNotification();
 		}
-		if (request->status.state != WZ_Notification_Status::NotificationState::closing)
+		if (request && (request->status.state != WZ_Notification_Status::NotificationState::closing))
 		{
 			// decay drag offset
 			const uint32_t dragDecayDuration = GAME_TICKS_PER_SEC * 1;
@@ -1075,6 +1000,8 @@ void W_NOTIFICATION::run(W_CONTEXT *psContext)
 
 void W_NOTIFICATION::clicked(W_CONTEXT *psContext, WIDGET_KEY key)
 {
+	ASSERT_OR_RETURN(, request != nullptr, "request is null");
+
 	if (request->status.state == WZ_Notification_Status::NotificationState::closing)
 	{
 		// if clicked while closing, set state to shown

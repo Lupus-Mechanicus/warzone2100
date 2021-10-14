@@ -34,7 +34,9 @@ static std::shared_ptr<W_LABEL> makeProductionRunSizeLabel()
 	init.y = OBJ_T1TEXTY;
 	init.width = 16;
 	init.height = 16;
-	return std::make_shared<W_LABEL>(&init);
+	auto label = std::make_shared<W_LABEL>(&init);
+	label->setTransparentToMouse(true);
+	return label;
 }
 
 void ManufactureController::updateData()
@@ -213,7 +215,13 @@ protected:
 		updateLayout();
 		auto factory = controller->getObjectAt(objectIndex);
 		ASSERT_NOT_NULLPTR_OR_RETURN(, factory);
-		ASSERT_OR_RETURN(, !isDead(factory), "Factory is dead");
+		if (isDead(factory))
+		{
+			ASSERT_FAILURE(!isDead(factory), "!isDead(factory)", AT_MACRO, __FUNCTION__, "Factory is dead");
+			// ensure the backing information is refreshed before the next draw
+			intRefreshScreen();
+			return;
+		}
 		displayIMD(Image(), ImdObject::Structure(factory), xOffset, yOffset);
 		displayIfHighlight(xOffset, yOffset);
 	}

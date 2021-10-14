@@ -37,7 +37,6 @@
 #include "clparse.h"
 #include "frontend.h"
 #include "keyedit.h"
-#include "keymap.h"
 #include "mission.h"
 #include "multiint.h"
 #include "multilimit.h"
@@ -70,7 +69,7 @@ static STAR newStar()
 {
 	STAR s;
 	s.xPos = rand() % barRightX;
-	s.speed = (rand() % 30 + 6) * pie_GetVideoBufferWidth() / 640.0;
+	s.speed = static_cast<int>((rand() % 30 + 6) * pie_GetVideoBufferWidth() / 640.0);
 	s.colour = pal_SetBrightness(150 + rand() % 100);
 	return s;
 }
@@ -82,9 +81,9 @@ static void setupLoadingScreen()
 	int h = pie_GetVideoBufferHeight();
 	int offset;
 
-	boxHeight = h / 40.0;
+	boxHeight = static_cast<int>(h / 40.0);
 	offset = boxHeight;
-	boxWidth = w - 2.0 * offset;
+	boxWidth = w - 2 * offset;
 
 	barRightX = w - offset;
 	barRightY = h - offset;
@@ -93,7 +92,7 @@ static void setupLoadingScreen()
 	barLeftY = barRightY - boxHeight;
 
 	starsNum = boxWidth / boxHeight;
-	starHeight = 2.0 * h / 640.0;
+	starHeight = static_cast<int>(2.0 * h / 640.0);
 
 	if (!stars)
 	{
@@ -193,7 +192,7 @@ TITLECODE titleLoop()
 			NETinit(true);
 			// Ensure the joinGame has a place to return to
 			changeTitleMode(TITLE);
-			joinGame(iptoconnect);
+			joinGame(iptoconnect, cliConnectToIpAsSpectator);
 		}
 		else
 		{
@@ -319,6 +318,7 @@ void closeLoadingScreen()
 
 bool displayGameOver(bool bDidit, bool showBackDrop)
 {
+	bool isFirstCallForThisGame = !testPlayerHasLost() && !testPlayerHasWon();
 	if (bDidit)
 	{
 		setPlayerHasWon(true);
@@ -331,12 +331,12 @@ bool displayGameOver(bool bDidit, bool showBackDrop)
 	else
 	{
 		setPlayerHasLost(true);
-		if (bMultiPlayer)
+		if (bMultiPlayer && isFirstCallForThisGame) // make sure we only accumulate one loss (even if this is called more than once, for example when losing initially, and then when the game fully ends)
 		{
 			updateMultiStatsLoses();
 		}
 	}
-	if (bMultiPlayer)
+	if (bMultiPlayer && isFirstCallForThisGame)
 	{
 		updateMultiStatsGames(); // update games played.
 
@@ -346,7 +346,18 @@ bool displayGameOver(bool bDidit, bool showBackDrop)
 
 	//clear out any mission widgets - timers etc that may be on the screen
 	clearMissionWidgets();
-	intAddMissionResult(bDidit, true, showBackDrop);
+
+	if (bMultiPlayer && NetPlay.players[selectedPlayer].isSpectator)
+	{
+		// Special message for spectators to inform them that the game is fully over
+		addConsoleMessage(_("GAME OVER"), CENTRE_JUSTIFY, SYSTEM_MESSAGE, false, MAX_CONSOLE_MESSAGE_DURATION);
+		addConsoleMessage(_("The battle is over - you can leave the room."), CENTRE_JUSTIFY, SYSTEM_MESSAGE, false, MAX_CONSOLE_MESSAGE_DURATION);
+		// TODO: Display this in a form with a "Quit to Main Menu" button?, or adapt intAddMissionResult to have a separate display for spectators?
+	}
+	else
+	{
+		intAddMissionResult(bDidit, true, showBackDrop);
+	}
 
 	return true;
 }

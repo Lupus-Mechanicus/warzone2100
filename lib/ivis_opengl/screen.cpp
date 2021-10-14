@@ -52,6 +52,7 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <limits>
 #ifndef GLM_ENABLE_EXPERIMENTAL
 	#define GLM_ENABLE_EXPERIMENTAL
 #endif
@@ -351,13 +352,13 @@ void screen_GenerateCoordinatesAndVBOs()
 
 	if (aspect < backdropAspect)
 	{
-		int offset = (screenWidth - screenHeight * backdropAspect) / 2;
+		int offset = static_cast<int>((screenWidth - screenHeight * backdropAspect) / 2);
 		x1 += offset;
 		x2 -= offset;
 	}
 	else
 	{
-		int offset = (screenHeight - screenWidth / backdropAspect) / 2;
+		int offset = static_cast<int>((screenHeight - screenWidth / backdropAspect) / 2);
 		y1 += offset;
 		y2 -= offset;
 	}
@@ -575,4 +576,14 @@ void screenDumpToDisk(const char *path, const char *level)
 		ssprintf(screendump_filename, "%swz2100-%04d%02d%02d_%02d%02d%02d-%s-%d.png", path, t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec, level, ++screendump_num);
 	}
 	screendump_required = true;
+}
+
+void screen_FlipIfBackDropTransition()
+{
+	static auto hadBackDrop = false;
+	if (hadBackDrop != screen_GetBackDrop())
+	{
+		pie_ScreenFlip(CLEAR_BLACK);
+		hadBackDrop = screen_GetBackDrop();
+	}
 }

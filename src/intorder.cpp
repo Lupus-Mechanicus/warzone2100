@@ -388,9 +388,12 @@ bool OrderUp = false;
 //
 static bool BuildSelectedDroidList()
 {
-	DROID *psDroid;
+	if (selectedPlayer >= MAX_PLAYERS)
+	{
+		return false;
+	}
 
-	for (psDroid = apsDroidLists[selectedPlayer]; psDroid; psDroid = psDroid->psNext)
+	for (DROID *psDroid = apsDroidLists[selectedPlayer]; psDroid; psDroid = psDroid->psNext)
 	{
 		if (psDroid->selected)
 		{
@@ -811,7 +814,7 @@ bool intAddOrder(BASE_OBJECT *psObj)
 
 	// Now we know how many orders there are we can resize the form accordingly.
 	int newHeight = Height + CLOSE_HEIGHT + ORDER_BUTGAP;
-	orderForm->setCalcLayout([newHeight](WIDGET *psWidget, unsigned int, unsigned int, unsigned int, unsigned int) {
+	orderForm->setCalcLayout([newHeight](WIDGET *psWidget) {
 		psWidget->setGeometry(psWidget->x(), ORDER_BOTTOMY - newHeight, psWidget->width(), newHeight);
 	});
 

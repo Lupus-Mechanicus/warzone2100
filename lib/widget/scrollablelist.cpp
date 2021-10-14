@@ -32,13 +32,14 @@ void ScrollableListWidget::initialize()
 	attach(scrollBar = ScrollBarWidget::make());
 	attach(listView = std::make_shared<ClipRectWidget>());
 	scrollBar->show(false);
+	scrollbarWidth = SCROLLBAR_WIDTH;
 	backgroundColor.rgba = 0;
 }
 
 void ScrollableListWidget::geometryChanged()
 {
-	scrollBar->setGeometry(width() - SCROLLBAR_WIDTH, 0, SCROLLBAR_WIDTH, height());
-	scrollBar->setViewSize(calculateListViewHeight());
+	scrollBar->setGeometry(width() - scrollbarWidth, 0, scrollbarWidth, height());
+	scrollBar->setViewSize(height());
 	layoutDirty = true;
 }
 
@@ -57,9 +58,19 @@ uint32_t ScrollableListWidget::snappedOffset()
 {
 	for (auto child : listView->children())
 	{
-		if (child->y() >= scrollBar->position())
+		if (child->geometry().bottom() < scrollBar->position())
 		{
-			return child->y();
+			continue;
+		}
+
+		const auto childOffsets = child->getScrollSnapOffsets().value_or(std::vector<uint32_t>{0});
+		for (const auto childOffset: childOffsets)
+		{
+			const auto y = child->y() + childOffset;
+			if (y >= scrollBar->position())
+			{
+				return y;
+			}
 		}
 	}
 
@@ -103,14 +114,14 @@ void ScrollableListWidget::updateLayout()
 		listView->setGeometry(padding.left, padding.top, listViewWidthWithoutScrollBar, listViewHeight);
 	}
 
-	scrollBar->setScrollableSize(scrollableHeight);
+	scrollBar->setScrollableSize(scrollableHeight + padding.top + padding.bottom);
 }
 
 void ScrollableListWidget::resizeChildren(uint32_t width)
 {
 	scrollableHeight = 0;
 	auto nextOffset = 0;
-	for (auto child : listView->children())
+	for (auto& child : listView->children())
 	{
 		child->setGeometry(0, nextOffset, width, child->height());
 		scrollableHeight = nextOffset + child->height();
@@ -188,7 +199,15 @@ void ScrollableListWidget::displayRecursive(WidgetGraphicsContext const& context
 
 int ScrollableListWidget::getScrollbarWidth() const
 {
-	return SCROLLBAR_WIDTH;
+	return scrollbarWidth;
+}
+
+void ScrollableListWidget::setScrollbarWidth(int newWidth)
+{
+	scrollbarWidth = newWidth;
+	geometryChanged();
+	layoutDirty = true;
+	updateLayout();
 }
 
 uint16_t ScrollableListWidget::getScrollPosition() const
@@ -201,4 +220,21 @@ void ScrollableListWidget::setScrollPosition(uint16_t newPosition)
 	updateLayout();
 	scrollBar->setPosition(newPosition);
 	listView->setTopOffset(snapOffset ? snappedOffset() : scrollBar->position());
+}
+
+int32_t ScrollableListWidget::idealWidth()
+{
+	auto maxItemIdealWidth = 0;
+	for (auto &item: listView->children())
+	{
+		maxItemIdealWidth = std::max(maxItemIdealWidth, item->idealWidth());
+	}
+
+	return maxItemIdealWidth + padding.left + padding.right + scrollbarWidth;
+}
+
+int32_t ScrollableListWidget::idealHeight()
+{
+	updateLayout();
+	return scrollableHeight + padding.top + padding.bottom;
 }

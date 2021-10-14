@@ -49,6 +49,7 @@ static float font_colour[4] = {1.f, 1.f, 1.f, 1.f};
 #include "ft2build.h"
 #include <unordered_map>
 #include <memory>
+#include <limits>
 
 #if defined(HB_VERSION_ATLEAST) && HB_VERSION_ATLEAST(1,0,5)
 //	#define WZ_FT_LOAD_FLAGS (FT_LOAD_DEFAULT | FT_LOAD_TARGET_LCD) // Needs further testing on low-DPI displays
@@ -101,7 +102,7 @@ struct GlyphMetrics
 
 struct FTFace
 {
-	FTFace(FT_Library &lib, const std::string &fileName, int32_t charSize, int32_t horizDPI, int32_t vertDPI)
+	FTFace(FT_Library &lib, const std::string &fileName, int32_t charSize, uint32_t horizDPI, uint32_t vertDPI)
 	{
 		UDWORD pFileSize = 0;
 		if (!loadFile(fileName.c_str(), &pFileData, &pFileSize))
@@ -545,9 +546,9 @@ void iV_TextInit(float horizScaleFactor, float vertScaleFactor)
 	// Use the scaling factors to multiply the default DPI (72) to determine the desired internal font rendering DPI.
 	_horizScaleFactor = horizScaleFactor;
 	_vertScaleFactor = vertScaleFactor;
-	float horizDPI = DEFAULT_DPI * horizScaleFactor;
-	float vertDPI = DEFAULT_DPI * vertScaleFactor;
-	debug(LOG_WZ, "Text-Rendering Scaling Factor: %f x %f; Internal Font DPI: %f x %f", _horizScaleFactor, _vertScaleFactor, horizDPI, vertDPI);
+	uint32_t horizDPI = static_cast<uint32_t>(DEFAULT_DPI * horizScaleFactor);
+	uint32_t vertDPI = static_cast<uint32_t>(DEFAULT_DPI * vertScaleFactor);
+	debug(LOG_WZ, "Text-Rendering Scaling Factor: %f x %f; Internal Font DPI: %" PRIu32 " x %" PRIu32 "", _horizScaleFactor, _vertScaleFactor, horizDPI, vertDPI);
 
 	regular = new FTFace(getGlobalFTlib().lib, "fonts/DejaVuSans.ttf", 12 * 64, horizDPI, vertDPI);
 	regularBold = new FTFace(getGlobalFTlib().lib, "fonts/DejaVuSans-Bold.ttf", 12 * 64, horizDPI, vertDPI);
@@ -597,18 +598,18 @@ int iV_GetEllipsisWidth(iV_fonts fontID)
 	return iV_Internal_GetEllipsis(fontID).width();
 }
 
-void iV_DrawEllipsis(iV_fonts fontID, Vector2i position, PIELIGHT colour)
+void iV_DrawEllipsis(iV_fonts fontID, Vector2f position, PIELIGHT colour)
 {
 	iV_Internal_GetEllipsis(fontID).render(position, colour);
 }
 
 unsigned int width_pixelsToPoints(unsigned int widthInPixels)
 {
-	return ceil((float)widthInPixels / _horizScaleFactor);
+	return static_cast<int>(ceil((float)widthInPixels / _horizScaleFactor));
 }
 unsigned int height_pixelsToPoints(unsigned int heightInPixels)
 {
-	return ceil((float)heightInPixels / _vertScaleFactor);
+	return static_cast<int>(ceil((float)heightInPixels / _vertScaleFactor));
 }
 
 // Returns the text width *in points*
@@ -642,7 +643,7 @@ unsigned int iV_GetCharWidth(uint32_t charCode, iV_fonts fontID)
 int metricsHeight_PixelsToPoints(int heightMetric)
 {
 	float ptMetric = (float)heightMetric / _vertScaleFactor;
-	return (ptMetric < 0) ? floor(ptMetric) : ceil(ptMetric);
+	return (ptMetric < 0) ? static_cast<int>(floor(ptMetric)) : static_cast<int>(ceil(ptMetric));
 }
 
 int iV_GetTextLineSize(iV_fonts fontID)
@@ -821,54 +822,20 @@ std::vector<TextLine> iV_FormatText(const char *String, UDWORD MaxWidth, UDWORD 
 	return lineDrawResults;
 }
 
-/** Draws formatted text with word wrap, long word splitting, embedded newlines
- *  (uses '@' rather than '\n') and colour toggle mode ('#') which enables or
- *  disables font colouring.
- *
- *  @param String   the string to display.
- *  @param x,y      X and Y coordinates of top left of formatted text.
- *  @param width    the maximum width of the formatted text (beyond which line
- *                  wrapping is used).
- *  @param justify  The alignment style to use, which is one of the following:
- *                  FTEXT_LEFTJUSTIFY, FTEXT_CENTRE or FTEXT_RIGHTJUSTIFY.
- *  @return the Y coordinate for the next text line.
- */
-int iV_DrawFormattedText(const char *String, UDWORD x, UDWORD y, UDWORD Width, UDWORD Justify, iV_fonts fontID)
-{
-	auto formattedTextLines = iV_FormatText(String, Width, Justify, fontID, bMultiPlayer);
-
-	int jy = y;
-	for (const auto& lineDetails : formattedTextLines)
-	{
-		const auto& lineString = lineDetails.text;
-		const auto& lineDrawOffset = lineDetails.offset;
-
-		// draw the text.
-		iV_DrawText(lineString.c_str(), x + lineDrawOffset.x, y + lineDrawOffset.y, fontID);
-	}
-
-	if (!formattedTextLines.empty())
-	{
-		jy = y + formattedTextLines.back().offset.y + iV_GetTextLineSize(fontID);
-	}
-
-	return jy;
-}
-
 void iV_DrawTextRotated(const char *string, float XPos, float YPos, float rotation, iV_fonts fontID)
 {
 	ASSERT_OR_RETURN(, string, "Couldn't render string!");
 
 	if (rotation != 0.f)
 	{
-		rotation = 180. - rotation;
+		rotation = 180.f - rotation;
 	}
 
 	PIELIGHT color;
-	color.vector[0] = font_colour[0] * 255.f;
-	color.vector[1] = font_colour[1] * 255.f;
-	color.vector[2] = font_colour[2] * 255.f;
-	color.vector[3] = font_colour[3] * 255.f;
+	color.vector[0] = static_cast<UBYTE>(font_colour[0] * 255.f);
+	color.vector[1] = static_cast<UBYTE>(font_colour[1] * 255.f);
+	color.vector[2] = static_cast<UBYTE>(font_colour[2] * 255.f);
+	color.vector[3] = static_cast<UBYTE>(font_colour[3] * 255.f);
 
 	TextRun tr(string, "en", HB_SCRIPT_COMMON, HB_DIRECTION_LTR);
 	DrawTextResult drawResult = getShaper().drawText(tr, getFTFace(fontID));
@@ -879,44 +846,9 @@ void iV_DrawTextRotated(const char *string, float XPos, float YPos, float rotati
 			delete textureID;
 		textureID = gfx_api::context::get().create_texture(1, drawResult.text.width, drawResult.text.height, gfx_api::pixel_format::FORMAT_RGBA8_UNORM_PACK8);
 		textureID->upload(0u, 0u, 0u, drawResult.text.width, drawResult.text.height, gfx_api::pixel_format::FORMAT_RGBA8_UNORM_PACK8, drawResult.text.data.get());
-		iV_DrawImageText(*textureID, Vector2i(XPos, YPos), Vector2f((float)drawResult.text.offset_x / _horizScaleFactor, (float)drawResult.text.offset_y / _vertScaleFactor), Vector2f((float)drawResult.text.width / _horizScaleFactor, (float)drawResult.text.height / _vertScaleFactor), rotation, color);
+		iV_DrawImageText(*textureID, Vector2f(XPos, YPos), Vector2f((float)drawResult.text.offset_x / _horizScaleFactor, (float)drawResult.text.offset_y / _vertScaleFactor), Vector2f((float)drawResult.text.width / _horizScaleFactor, (float)drawResult.text.height / _vertScaleFactor), rotation, color);
 	}
 }
-
-#if 0
-static void iV_DrawTextRotatedFv(float x, float y, float rotation, const char *format, va_list ap, iV_fonts fontID)
-{
-	va_list aq;
-	size_t size;
-	char *str;
-
-	/* Required because we're using the va_list ap twice otherwise, which
-	 * results in undefined behaviour. See stdarg(3) for details.
-	 */
-	va_copy(aq, ap);
-
-	// Allocate a buffer large enough to hold our string on the stack
-	size = vsnprintf(NULL, 0, format, ap);
-	str = (char *)alloca(size + 1);
-
-	// Print into our newly created string buffer
-	vsprintf(str, format, aq);
-
-	va_end(aq);
-
-	// Draw the produced string to the screen at the given position and rotation
-	iV_DrawTextRotated(str, x, y, rotation, fontID);
-}
-
-void iV_DrawTextF(float x, float y, const char *format, ...)
-{
-	va_list ap;
-
-	va_start(ap, format);
-	iV_DrawTextRotatedFv(x, y, 0.f, format, ap);
-	va_end(ap);
-}
-#endif
 
 int WzText::width()
 {
@@ -1050,7 +982,7 @@ inline void WzText::updateCacheIfNecessary()
 	}
 }
 
-void WzText::render(Vector2i position, PIELIGHT colour, float rotation, int maxWidth, int maxHeight)
+void WzText::render(Vector2f position, PIELIGHT colour, float rotation, int maxWidth, int maxHeight)
 {
 	updateCacheIfNecessary();
 
@@ -1063,7 +995,7 @@ void WzText::render(Vector2i position, PIELIGHT colour, float rotation, int maxW
 
 	if (rotation != 0.f)
 	{
-		rotation = 180. - rotation;
+		rotation = 180.f - rotation;
 	}
 
 	if (maxWidth <= 0 && maxHeight <= 0)
@@ -1077,6 +1009,18 @@ void WzText::render(Vector2i position, PIELIGHT colour, float rotation, int maxW
 		clippingRectInPixels.setHeight((maxHeight > 0) ? static_cast<int>((float)maxHeight * mRenderingVertScaleFactor) : dimensions.y);
 		iV_DrawImageTextClipped(*texture, dimensions, position, Vector2f(offsets.x / mRenderingHorizScaleFactor, offsets.y / mRenderingVertScaleFactor), Vector2f((maxWidth > 0) ? maxWidth : dimensions.x / mRenderingHorizScaleFactor, (maxHeight > 0) ? maxHeight : dimensions.y / mRenderingVertScaleFactor), rotation, colour, clippingRectInPixels);
 	}
+}
+
+void WzText::renderOutlined(int x, int y, PIELIGHT colour, PIELIGHT outlineColour)
+{
+	for (auto i = -1; i <= 1; i++)
+	{
+		for (auto j = -1; j <= 1; j++)
+		{
+			render(x + i, y + j, outlineColour);
+		}
+	}
+	render(x, y, colour);
 }
 
 // Sets the text, truncating to a desired width limit (in *points*) if needed

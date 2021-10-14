@@ -2,19 +2,17 @@ include("script/campaign/libcampaign.js");
 include("script/campaign/templates.js");
 
 const COLLECTIVE_RES = [
-	"R-Defense-WallUpgrade05", "R-Struc-Materials06",
-	"R-Struc-Factory-Upgrade06", "R-Struc-VTOLPad-Upgrade03",
-	"R-Vehicle-Engine05", "R-Vehicle-Metals05", "R-Cyborg-Metals06",
-	"R-Vehicle-Armor-Heat02", "R-Cyborg-Armor-Heat02",
-	"R-Sys-Engineering02", "R-Wpn-Cannon-Accuracy02", "R-Wpn-Cannon-Damage05",
-	"R-Wpn-Cannon-ROF03", "R-Wpn-Flamer-Damage06", "R-Wpn-Flamer-ROF03",
-	"R-Wpn-MG-Damage07", "R-Wpn-MG-ROF03", "R-Wpn-Mortar-Acc02",
-	"R-Wpn-Mortar-Damage06", "R-Wpn-Mortar-ROF03",
-	"R-Wpn-Rocket-Accuracy02", "R-Wpn-Rocket-Damage06",
-	"R-Wpn-Rocket-ROF03", "R-Wpn-RocketSlow-Accuracy03",
-	"R-Wpn-RocketSlow-Damage06", "R-Sys-Sensor-Upgrade01",
-	"R-Wpn-Howitzer-Accuracy02", "R-Wpn-RocketSlow-ROF03",
-	"R-Wpn-Howitzer-Damage03",
+	"R-Defense-WallUpgrade06", "R-Struc-Materials06", "R-Sys-Engineering02",
+	"R-Vehicle-Engine06", "R-Vehicle-Metals06", "R-Cyborg-Metals06",
+	"R-Wpn-Cannon-Accuracy02", "R-Wpn-Cannon-Damage06","R-Wpn-Cannon-ROF03",
+	"R-Wpn-Flamer-Damage06", "R-Wpn-Flamer-ROF03", "R-Wpn-MG-Damage07",
+	"R-Wpn-MG-ROF03", "R-Wpn-Mortar-Acc02", "R-Wpn-Mortar-Damage06",
+	"R-Wpn-Mortar-ROF03", "R-Wpn-Rocket-Accuracy02", "R-Wpn-Rocket-Damage06",
+	"R-Wpn-Rocket-ROF03", "R-Wpn-RocketSlow-Accuracy03", "R-Wpn-RocketSlow-Damage06",
+	"R-Sys-Sensor-Upgrade01", "R-Wpn-RocketSlow-ROF03", "R-Wpn-Howitzer-ROF03",
+	"R-Wpn-Howitzer-Damage09", "R-Cyborg-Armor-Heat03", "R-Vehicle-Armor-Heat03",
+	"R-Wpn-Bomb-Damage02", "R-Wpn-AAGun-Damage03", "R-Wpn-AAGun-ROF03",
+	"R-Wpn-AAGun-Accuracy02", "R-Wpn-Howitzer-Accuracy02", "R-Struc-VTOLPad-Upgrade03",
 ];
 
 function vtolAttack()
@@ -80,8 +78,10 @@ function truckDefense()
 		return;
 	}
 
-	var list = ["AASite-QuadBof", "CO-WallTower-HvCan", "CO-Tower-RotMG"];
-	camQueueBuilding(THE_COLLECTIVE, list[camRand(list.length)]);
+	var list = ["Emplacement-Rocket06-IDF", "Emplacement-Howitzer150", "CO-Tower-HvATRkt", "CO-Tower-HVCan", "Sys-CB-Tower01"];
+	camQueueBuilding(THE_COLLECTIVE, list[camRand(list.length)], camMakePos("buildPos1"));
+	camQueueBuilding(THE_COLLECTIVE, list[camRand(list.length)], camMakePos("buildPos2"));
+	camQueueBuilding(THE_COLLECTIVE, list[camRand(list.length)], camMakePos("buildPos3"));
 }
 
 function eventStartLevel()
@@ -149,25 +149,25 @@ function eventStartLevel()
 			assembly: "COHeavyFacL-b2Assembly",
 			order: CAM_ORDER_ATTACK,
 			groupSize: 5,
-			throttle: camChangeOnDiff(camSecondsToMilliseconds(60)),
+			throttle: camChangeOnDiff(camSecondsToMilliseconds(70)),
 			data: {
 				regroup: false,
 				repair: 20,
 				count: -1,
 			},
-			templates: [cTempl.comhpv, cTempl.cohact]
+			templates: [cTempl.cohhpv, cTempl.cohact]
 		},
 		"COHeavyFacR-b2": {
 			assembly: "COHeavyFacR-b2Assembly",
 			order: CAM_ORDER_ATTACK,
 			groupSize: 5,
-			throttle: camChangeOnDiff(camSecondsToMilliseconds(60)),
+			throttle: camChangeOnDiff(camSecondsToMilliseconds(50)),
 			data: {
 				regroup: false,
 				repair: 20,
 				count: -1,
 			},
-			templates: [cTempl.comrotmh, cTempl.cohct]
+			templates: [cTempl.comrotmh, cTempl.cohact]
 		},
 		"COVtolFac-b3": {
 			order: CAM_ORDER_ATTACK,
@@ -185,7 +185,7 @@ function eventStartLevel()
 	truckDefense();
 
 	queue("setupLandGroups", camSecondsToMilliseconds(50));
-	queue("vtolAttack", camMinutesToMilliseconds(1));
-	queue("enableFactories", camChangeOnDiff(camMinutesToMilliseconds(1.5)));
-	setTimer("truckDefense", camMinutesToMilliseconds(2));
+	queue("vtolAttack", camChangeOnDiff(camMinutesToMilliseconds(1.5)));
+	queue("enableFactories", camChangeOnDiff(camMinutesToMilliseconds(2.5)));
+	setTimer("truckDefense", camChangeOnDiff(camMinutesToMilliseconds(3)));
 }

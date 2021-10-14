@@ -47,6 +47,7 @@
 #endif
 // Language names (http://en.wikipedia.org/wiki/List_of_ISO_639-2_codes)
 #define LANG_NAME_BASQUE "euskara"
+#define LANG_NAME_BULGARIAN "български език"
 #define LANG_NAME_CATALAN "català"
 #define LANG_NAME_CHINESE_SIMPLIFIED "汉语"
 #define LANG_NAME_CHINESE_TRADITIONAL "漢語"
@@ -63,6 +64,7 @@
 #define LANG_NAME_GERMAN "Deutsch"
 #define LANG_NAME_GREEK "Ελληνικά"
 #define LANG_NAME_HUNGARIAN "magyar"
+#define LANG_NAME_INDONESIAN "Bahasa Indonesia"
 #define LANG_NAME_IRISH "Imruagadh"
 #define LANG_NAME_ITALIAN "Italiano"
 #define LANG_NAME_KOREAN "한국어"
@@ -101,6 +103,7 @@ static const struct
 {
 	{ "", N_("System locale"), LANG_NEUTRAL, SUBLANG_DEFAULT },
 #  if defined(ENABLE_NLS)
+	{ "bg", LANG_NAME_BULGARIAN, LANG_BULGARIAN, SUBLANG_DEFAULT },
 	{ "ca", LANG_NAME_CATALAN, LANG_CATALAN, SUBLANG_DEFAULT },
 	{ "cs", LANG_NAME_CZECH, LANG_CZECH, SUBLANG_DEFAULT },
 	{ "da", LANG_NAME_DANISH, LANG_DANISH, SUBLANG_DEFAULT },
@@ -124,6 +127,7 @@ static const struct
 	{ "ga", LANG_NAME_IRISH, LANG_IRISH, SUBLANG_IRISH_IRELAND },
 	{ "hr", LANG_NAME_CROATIAN, LANG_CROATIAN, SUBLANG_DEFAULT },
 	{ "hu", LANG_NAME_HUNGARIAN, LANG_HUNGARIAN, SUBLANG_DEFAULT },
+	{ "id", LANG_NAME_INDONESIAN, LANG_INDONESIAN, SUBLANG_DEFAULT },
 	{ "it", LANG_NAME_ITALIAN, LANG_ITALIAN, SUBLANG_ITALIAN },
 	{ "ko_KR", LANG_NAME_KOREAN, LANG_KOREAN, SUBLANG_DEFAULT },
 //	{ "la", LANG_NAME_LATIN, LANG_LATIN, SUBLANG_DEFAULT },
@@ -164,6 +168,7 @@ static const struct
 {
 	{ "",   N_("System locale"), "", "" },
 #  if defined(ENABLE_NLS)
+	{ "bg", LANG_NAME_BULGARIAN, "bg_BG.UTF-8", "bg" },
 	{ "ca_ES", LANG_NAME_CATALAN, "ca_ES.UTF-8", "ca" },
 	{ "cs_CZ", LANG_NAME_CZECH, "cs_CZ.UTF-8", "cs" },
 	{ "da", LANG_NAME_DANISH, "da_DK.UTF-8", "da_DK" },
@@ -184,6 +189,7 @@ static const struct
 	{ "ga_IE", LANG_NAME_IRISH, "ga_IE.UTF-8", "ga" },
 	{ "hr", LANG_NAME_CROATIAN, "hr_HR.UTF-8", "hr_HR" },
 	{ "hu", LANG_NAME_HUNGARIAN, "hu_HU.UTF-8", "hu_HU" },
+	{ "id", LANG_NAME_INDONESIAN, "id_ID.UTF-8", "id" },
 	{ "it", LANG_NAME_ITALIAN, "it_IT.UTF-8", "it_IT" },
 	{ "ko_KR", LANG_NAME_KOREAN, "ko_KR.UTF-8", "ko" },
 	{ "la", LANG_NAME_LATIN, "la.UTF-8", "la" },
@@ -428,14 +434,14 @@ std::string wzBindTextDomain(const char *domainname, const char *dirname)
 	if (wstr_len <= 0)
 	{
 		DWORD dwError = GetLastError();
-		debug(LOG_ERROR, "Could not not convert string from UTF-8; MultiByteToWideChar failed with error %d: %s\n", dwError, dirname);
+		debug(LOG_ERROR, "Could not not convert string from UTF-8; MultiByteToWideChar failed with error %lu: %s\n", dwError, dirname);
 		return std::string();
 	}
 	auto wstr_dirname = std::vector<wchar_t>(wstr_len, L'\0');
 	if (MultiByteToWideChar(CP_UTF8, 0, dirname, -1, &wstr_dirname[0], wstr_len) == 0)
 	{
 		DWORD dwError = GetLastError();
-		debug(LOG_ERROR, "Could not not convert string from UTF-8; MultiByteToWideChar[2] failed with error %d: %s\n", dwError, dirname);
+		debug(LOG_ERROR, "Could not not convert string from UTF-8; MultiByteToWideChar[2] failed with error %lu: %s\n", dwError, dirname);
 		return std::string();
 	}
 
@@ -454,7 +460,7 @@ std::string wzBindTextDomain(const char *domainname, const char *dirname)
 	{
 		// Encoding conversion error
 		DWORD dwError = GetLastError();
-		debug(LOG_ERROR, "Could not not convert string to UTF-8; WideCharToMultiByte failed with error %d\n", dwError);
+		debug(LOG_ERROR, "Could not not convert string to UTF-8; WideCharToMultiByte failed with error %lu\n", dwError);
 		return std::string();
 	}
 	utf8Buffer.resize(utf8Len, 0);
@@ -462,7 +468,7 @@ std::string wzBindTextDomain(const char *domainname, const char *dirname)
 	{
 		// Encoding conversion error
 		DWORD dwError = GetLastError();
-		debug(LOG_ERROR, "Could not not convert string to UTF-8; WideCharToMultiByte[2] failed with error %d\n", dwError);
+		debug(LOG_ERROR, "Could not not convert string to UTF-8; WideCharToMultiByte[2] failed with error %lu\n", dwError);
 		return std::string();
 	}
 	return std::string(utf8Buffer.data(), utf8Len - 1);

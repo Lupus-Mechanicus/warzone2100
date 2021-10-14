@@ -55,6 +55,8 @@
 
 #include <unordered_set>
 
+#include "3rdparty/gsl_finally.h"
+
 extern int lev_get_lineno();
 extern char *lev_get_text();
 extern int lev_lex();
@@ -203,6 +205,8 @@ bool levParse(const char *buffer, size_t size, searchPathMode pathMode, bool ign
 	lev_set_extra(&input);
 
 	state = LP_START;
+	auto always_destroy_on_return = gsl::finally([] { lev_lex_destroy(); });
+
 	for (token = lev_lex(); token != 0; token = lev_lex())
 	{
 		switch (token)
@@ -466,8 +470,6 @@ bool levParse(const char *buffer, size_t size, searchPathMode pathMode, bool ign
 		}
 	}
 
-	lev_lex_destroy();
-
 	// Accept empty files when parsing (indicated by currData < 0)
 	if (currData >= 0
 	    && (state != LP_WAITDATA
@@ -511,6 +513,7 @@ bool levReleaseMissionData()
 			}
 		}
 	}
+	releaseObjectives = true; // allow releasing mission objectives after quitting / saveload
 	return true;
 }
 
@@ -1024,7 +1027,7 @@ bool levLoadData(char const *name, Sha256 const *hash, char *pSaveName, GAME_TYP
 			return false;
 		}
 	}
-
+	// this will trigger upgrades
 	if (!stageThreeInitialise())
 	{
 		debug(LOG_ERROR, "Failed stageThreeInitialise()!");

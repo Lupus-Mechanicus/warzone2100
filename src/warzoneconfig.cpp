@@ -60,11 +60,12 @@ struct WARZONE_GLOBALS
 	int mapZoomRate = MAP_ZOOM_RATE_DEFAULT;
 	int radarZoom = DEFAULT_RADARZOOM;
 	int cameraSpeed = CAMERASPEED_DEFAULT;
-	int scrollEvent = 0; // map/radar zoom
 	bool radarJump = false;
 	video_backend gfxBackend = video_backend::opengl; // the actual default value is determined in loadConfig()
 	JS_BACKEND jsBackend = (JS_BACKEND)0;
 	bool autoAdjustDisplayScale = true;
+	int autoLagKickSeconds = 60;
+	bool disableReplayRecording = false;
 };
 
 static WARZONE_GLOBALS warGlobs;
@@ -362,16 +363,6 @@ void war_SetCameraSpeed(int cameraSpeed)
 	}
 }
 
-int war_GetScrollEvent()
-{
-	return warGlobs.scrollEvent;
-}
-
-void war_SetScrollEvent(int scrollEvent)
-{
-	warGlobs.scrollEvent = scrollEvent;
-}
-
 bool war_GetRadarJump()
 {
 	return warGlobs.radarJump;
@@ -411,4 +402,29 @@ bool war_getAutoAdjustDisplayScale()
 void war_setAutoAdjustDisplayScale(bool autoAdjustDisplayScale)
 {
 	warGlobs.autoAdjustDisplayScale = autoAdjustDisplayScale;
+}
+
+int war_getAutoLagKickSeconds()
+{
+	return warGlobs.autoLagKickSeconds;
+}
+
+void war_setAutoLagKickSeconds(int seconds)
+{
+	seconds = std::min(seconds, 0);
+	if (seconds > 0)
+	{
+		seconds = std::max(seconds, 60);
+	}
+	warGlobs.autoLagKickSeconds = seconds;
+}
+
+bool war_getDisableReplayRecording()
+{
+	return warGlobs.disableReplayRecording;
+}
+
+void war_setDisableReplayRecording(bool disable)
+{
+	warGlobs.disableReplayRecording = disable;
 }

@@ -73,13 +73,13 @@
 #include "mapgrid.h"
 #include "selection.h"
 #include "scores.h"
-#include "keymap.h"
 #include "texture.h"
 #include "warzoneconfig.h"
 #include "combat.h"
 #include "qtscript.h"
 #include "activity.h"
 #include "lib/framework/wztime.h"
+#include "keybind.h"
 
 #define		IDMISSIONRES_TXT		11004
 #define		IDMISSIONRES_LOAD		11005
@@ -255,11 +255,11 @@ void initMission()
 	mission.mapWidth = 0;
 	for (auto &i : mission.psBlockMap)
 	{
-		i = nullptr;
+		i.reset();
 	}
 	for (auto &i : mission.psAuxMap)
 	{
-		i = nullptr;
+		i.reset();
 	}
 
 	//init all the landing zones
@@ -318,24 +318,20 @@ bool missionShutDown()
 		mission.apsSensorList[0] = nullptr;
 		mission.apsOilList[0] = nullptr;
 
-		psMapTiles = mission.psMapTiles;
+		psMapTiles = std::move(mission.psMapTiles);
 		mapWidth = mission.mapWidth;
 		mapHeight = mission.mapHeight;
 		for (int i = 0; i < ARRAY_SIZE(mission.psBlockMap); ++i)
 		{
-			free(psBlockMap[i]);
-			psBlockMap[i] = mission.psBlockMap[i];
-			mission.psBlockMap[i] = nullptr;
+			psBlockMap[i] = std::move(mission.psBlockMap[i]);
 		}
 		for (int i = 0; i < ARRAY_SIZE(mission.psAuxMap); ++i)
 		{
-			free(psAuxMap[i]);
-			psAuxMap[i] = mission.psAuxMap[i];
-			mission.psAuxMap[i] = nullptr;
+			psAuxMap[i] = std::move(mission.psAuxMap[i]);
 		}
 		std::swap(mission.psGateways, gwGetGateways());
 	}
-
+	keybindShutdown();
 	// sorry if this breaks something - but it looks like it's what should happen - John
 	mission.type = LEVEL_TYPE::LDS_NONE;
 
@@ -532,7 +528,7 @@ void addTransporterTimerInterface()
 	W_CLICKFORM     *psForm;
 
 	//check if reinforcements are allowed
-	if (mission.ETA >= 0)
+	if (mission.ETA >= 0 && selectedPlayer < MAX_PLAYERS)
 	{
 		//check the player has at least one Transporter back at base
 		for (DROID *psDroid = mission.apsDroidLists[selectedPlayer]; psDroid != nullptr; psDroid = psDroid->psNext)
@@ -666,29 +662,10 @@ static void saveMissionData()
 
 	debug(LOG_SAVE, "called");
 
+	ASSERT(selectedPlayer < MAX_PLAYERS, "selectedPlayer %" PRIu32 " exceeds MAX_PLAYERS", selectedPlayer);
+
 	//clear out the audio
 	audio_StopAll();
-
-	//save the mission data
-	mission.psMapTiles = psMapTiles;
-	mission.mapWidth = mapWidth;
-	mission.mapHeight = mapHeight;
-	for (int i = 0; i < ARRAY_SIZE(mission.psBlockMap); ++i)
-	{
-		mission.psBlockMap[i] = psBlockMap[i];
-	}
-	for (int i = 0; i < ARRAY_SIZE(mission.psAuxMap); ++i)
-	{
-		mission.psAuxMap[i] = psAuxMap[i];
-	}
-	mission.scrollMinX = scrollMinX;
-	mission.scrollMinY = scrollMinY;
-	mission.scrollMaxX = scrollMaxX;
-	mission.scrollMaxY = scrollMaxY;
-	std::swap(mission.psGateways, gwGetGateways());
-	// save the selectedPlayer's LZ
-	mission.homeLZ_X = getLandingX(selectedPlayer);
-	mission.homeLZ_Y = getLandingY(selectedPlayer);
 
 	bRepairExists = false;
 	//set any structures currently being built to completed for the selected player
@@ -743,6 +720,27 @@ static void saveMissionData()
 			orderDroid(psDroid, DORDER_STOP, ModeImmediate);
 		}
 	}
+
+	//save the mission data
+	mission.psMapTiles = std::move(psMapTiles);
+	mission.mapWidth = mapWidth;
+	mission.mapHeight = mapHeight;
+	for (int i = 0; i < ARRAY_SIZE(mission.psBlockMap); ++i)
+	{
+		mission.psBlockMap[i] = std::move(psBlockMap[i]);
+	}
+	for (int i = 0; i < ARRAY_SIZE(mission.psAuxMap); ++i)
+	{
+		mission.psAuxMap[i] = std::move(psAuxMap[i]);
+	}
+	mission.scrollMinX = scrollMinX;
+	mission.scrollMinY = scrollMinY;
+	mission.scrollMaxX = scrollMaxX;
+	mission.scrollMaxY = scrollMaxY;
+	std::swap(mission.psGateways, gwGetGateways());
+	// save the selectedPlayer's LZ
+	mission.homeLZ_X = getLandingX(selectedPlayer);
+	mission.homeLZ_Y = getLandingY(selectedPlayer);
 
 	for (inc = 0; inc < MAX_PLAYERS; inc++)
 	{
@@ -825,19 +823,17 @@ void restoreMissionData()
 	mission.apsSensorList[0] = nullptr;
 	//swap mission data over
 
-	psMapTiles = mission.psMapTiles;
+	psMapTiles = std::move(mission.psMapTiles);
 
 	mapWidth = mission.mapWidth;
 	mapHeight = mission.mapHeight;
 	for (int i = 0; i < ARRAY_SIZE(mission.psBlockMap); ++i)
 	{
-		psBlockMap[i] = mission.psBlockMap[i];
-		mission.psBlockMap[i] = nullptr;
+		psBlockMap[i] = std::move(mission.psBlockMap[i]);
 	}
 	for (int i = 0; i < ARRAY_SIZE(mission.psAuxMap); ++i)
 	{
-		psAuxMap[i] = mission.psAuxMap[i];
-		mission.psAuxMap[i] = nullptr;
+		psAuxMap[i] = std::move(mission.psAuxMap[i]);
 	}
 	scrollMinX = mission.scrollMinX;
 	scrollMinY = mission.scrollMinY;
@@ -872,6 +868,8 @@ void saveMissionLimboData()
 	STRUCTURE           *psStruct;
 
 	debug(LOG_SAVE, "called");
+
+	ASSERT(selectedPlayer < MAX_PLAYERS, "selectedPlayer %" PRIu32 " exceeds MAX_PLAYERS", selectedPlayer);
 
 	//clear out the audio
 	audio_StopAll();
@@ -913,6 +911,8 @@ void placeLimboDroids()
 	PICKTILE		pickRes;
 
 	debug(LOG_SAVE, "called");
+
+	ASSERT(selectedPlayer < MAX_PLAYERS, "selectedPlayer %" PRIu32 " exceeds MAX_PLAYERS", selectedPlayer);
 
 	// Copy the droids across for the selected Player
 	for (psDroid = apsLimboDroids[selectedPlayer]; psDroid != nullptr; psDroid = psNext)
@@ -962,6 +962,8 @@ void restoreMissionLimboData()
 
 	debug(LOG_SAVE, "called");
 
+	ASSERT(selectedPlayer < MAX_PLAYERS, "selectedPlayer %" PRIu32 " exceeds MAX_PLAYERS", selectedPlayer);
+
 	/*the droids stored in the mission droid list need to be added back
 	into the current droid list*/
 	for (psDroid = mission.apsDroidLists[selectedPlayer]; psDroid; psDroid = psNext)
@@ -986,6 +988,8 @@ void saveCampaignData()
 	DROID		*psDroid, *psNext, *psSafeDroid, *psNextSafe, *psCurr, *psCurrNext;
 
 	debug(LOG_SAVE, "called");
+
+	ASSERT(selectedPlayer < MAX_PLAYERS, "selectedPlayer %" PRIu32 " exceeds MAX_PLAYERS", selectedPlayer);
 
 	// If the droids have been moved to safety then get any Transporters that exist
 	if (getDroidsToSafetyFlag())
@@ -1221,6 +1225,8 @@ static bool startMissionBetween()
 //check no units left with any settings that are invalid
 static void clearCampaignUnits()
 {
+	if (selectedPlayer >= MAX_PLAYERS) { return; }
+
 	for (DROID *psDroid = apsDroidLists[selectedPlayer]; psDroid; psDroid = psDroid->psNext)
 	{
 		orderDroid(psDroid, DORDER_STOP, ModeImmediate);
@@ -1237,6 +1243,8 @@ static void processMission()
 	DROID			*psDroid;
 	UDWORD			droidX, droidY;
 	PICKTILE		pickRes;
+
+	ASSERT(selectedPlayer < MAX_PLAYERS, "selectedPlayer %" PRIu32 " exceeds MAX_PLAYERS", selectedPlayer);
 
 	//and the rest on the mission map  - for now?
 	for (psDroid = apsDroidLists[selectedPlayer]; psDroid != nullptr; psDroid = psNext)
@@ -1281,6 +1289,8 @@ void processMissionLimbo()
 {
 	DROID			*psNext, *psDroid;
 	UDWORD	numDroidsAddedToLimboList = 0;
+
+	ASSERT(selectedPlayer < MAX_PLAYERS, "selectedPlayer %" PRIu32 " exceeds MAX_PLAYERS", selectedPlayer);
 
 	//all droids (for selectedPlayer only) are placed into the limbo list
 	for (psDroid = apsDroidLists[selectedPlayer]; psDroid != nullptr; psDroid = psNext)
@@ -1355,6 +1365,16 @@ void swapMissionPointers()
 
 void endMission()
 {
+	if (mission.type != LEVEL_TYPE::LDS_BETWEEN)
+	{
+		releaseAllFlicMessages(apsMessages); //Needed to remove mission objectives from offworld missions
+		releaseObjectives = true;
+	}
+	else
+	{
+		releaseObjectives = false;
+	}
+
 	if (mission.type == LEVEL_TYPE::LDS_NONE)
 	{
 		//can't go back any further!!
@@ -1532,6 +1552,8 @@ static void missionResetDroids()
 {
 	debug(LOG_SAVE, "called");
 
+	ASSERT(selectedPlayer < MAX_PLAYERS, "selectedPlayer %" PRIu32 " exceeds MAX_PLAYERS", selectedPlayer);
+
 	for (unsigned int player = 0; player < MAX_PLAYERS; player++)
 	{
 		for (DROID *psDroid = apsDroidLists[player]; psDroid != nullptr; psDroid = psDroid->psNext)
@@ -1684,6 +1706,7 @@ void unloadTransporter(DROID *psTransporter, UDWORD x, UDWORD y, bool goingHome)
 	//unload all the droids from within the current Transporter
 	if (isTransporter(psTransporter))
 	{
+		ASSERT(psTransporter->psGroup != nullptr, "psTransporter->psGroup is null??");
 		for (psDroid = psTransporter->psGroup->psList; psDroid != nullptr && psDroid != psTransporter; psDroid = psNext)
 		{
 			psNext = psDroid->psGrpNext;
@@ -1800,6 +1823,7 @@ void missionMoveTransporterOffWorld(DROID *psTransporter)
 		//need a callback for when all the selectedPlayers' reinforcements have been delivered
 		if (psTransporter->player == selectedPlayer)
 		{
+			ASSERT(selectedPlayer < MAX_PLAYERS, "selectedPlayer %" PRIu32 " exceeds MAX_PLAYERS", selectedPlayer);
 			psDroid = nullptr;
 			for (psDroid = mission.apsDroidLists[selectedPlayer]; psDroid != nullptr; psDroid = psDroid->psNext)
 			{
@@ -2173,18 +2197,26 @@ static void intDisplayMissionBackDrop(WIDGET *psWidget, UDWORD xOffset, UDWORD y
 
 static void missionResetInGameState()
 {
+	// Add the background
+	// get rid of reticule etc..
+	intResetScreen(false);
+
 	//stop the game if in single player mode
 	setMissionPauseState();
 
 	// reset the input state
 	resetInput();
 
-	// Add the background
-	// get rid of reticule etc..
-	intResetScreen(false);
 	forceHidePowerBar();
 	intRemoveReticule();
 	intRemoveMissionTimer();
+}
+
+static void intDestroyMissionResultWidgets()
+{
+	widgDelete(psWScreen, IDMISSIONRES_TITLE);
+	widgDelete(psWScreen, IDMISSIONRES_FORM);
+	widgDelete(psWScreen, IDMISSIONRES_BACKFORM);
 }
 
 static bool _intAddMissionResult(bool result, bool bPlaySuccess, bool showBackDrop)
@@ -2205,6 +2237,9 @@ static bool _intAddMissionResult(bool result, bool bPlaySuccess, bool showBackDr
 		screen_RestartBackDrop();
 	}
 
+	// ensure these widgets are deleted before attempting to create
+	intDestroyMissionResultWidgets();
+
 	sFormInit.formID		= 0;
 	sFormInit.id			= IDMISSIONRES_BACKFORM;
 	sFormInit.style			= WFORM_PLAIN;
@@ -2216,6 +2251,7 @@ static bool _intAddMissionResult(bool result, bool bPlaySuccess, bool showBackDr
 		psWidget->pUserData = nullptr;
 	};
 	W_FORM *missionResBackForm = widgAddForm(psWScreen, &sFormInit);
+	ASSERT_OR_RETURN(false, missionResBackForm != nullptr, "Failed to create IDMISSIONRES_BACKFORM");
 	missionResBackForm->setCalcLayout(LAMBDA_CALCLAYOUT_SIMPLE({
 		psWidget->setGeometry(0 + D_W, 0 + D_H, 640, 480);
 	}));
@@ -2357,9 +2393,7 @@ bool intAddMissionResult(bool result, bool bPlaySuccess, bool showBackDrop)
 
 void intRemoveMissionResultNoAnim()
 {
-	widgDelete(psWScreen, IDMISSIONRES_TITLE);
-	widgDelete(psWScreen, IDMISSIONRES_FORM);
-	widgDelete(psWScreen, IDMISSIONRES_BACKFORM);
+	intDestroyMissionResultWidgets();
 
 	cdAudio_Stop();
 
@@ -2889,6 +2923,7 @@ void missionDestroyObjects()
 	}
 
 	// human player, check that we do not reference the cleared out data
+	ASSERT(selectedPlayer < MAX_PLAYERS, "selectedPlayer %" PRIu32 " exceeds MAX_PLAYERS", selectedPlayer);
 	Player = selectedPlayer;
 
 	psDroid = apsDroidLists[Player];
@@ -2944,6 +2979,8 @@ void processPreviousCampDroids()
 {
 	DROID           *psDroid, *psNext;
 
+	ASSERT(selectedPlayer < MAX_PLAYERS, "selectedPlayer %" PRIu32 " exceeds MAX_PLAYERS", selectedPlayer);
+
 	// See if any are left
 	if (mission.apsDroidLists[selectedPlayer])
 	{
@@ -2988,6 +3025,7 @@ bool getPlayCountDown()
 //checks to see if the player has any droids (except Transporters left)
 bool missionDroidsRemaining(UDWORD player)
 {
+	ASSERT_OR_RETURN(false, player < MAX_PLAYERS, "invalid player: %" PRIu32 "", player);
 	for (DROID *psDroid = apsDroidLists[player]; psDroid != nullptr; psDroid = psDroid->psNext)
 	{
 		if (!isTransporter(psDroid))
@@ -3040,9 +3078,33 @@ void clearMissionWidgets()
 	intRemoveTransporterLaunch();
 }
 
+/**
+ * Try to find a transporter among the player's droids, or in the mission list (transporter waiting to come back).
+ */
+static DROID *find_transporter()
+{
+	ASSERT_OR_RETURN(nullptr, selectedPlayer < MAX_PLAYERS, "selectedPlayer %" PRIu32 " exceeds MAX_PLAYERS", selectedPlayer);
+
+	for (auto droid_list : {apsDroidLists[selectedPlayer], mission.apsDroidLists[selectedPlayer]})
+	{
+		for (auto droid = droid_list; droid != nullptr; droid = droid->psNext)
+		{
+			if (isTransporter(droid))
+			{
+				return droid;
+			}
+		}
+	}
+
+	return nullptr;
+}
+
 void resetMissionWidgets()
 {
-	DROID       *psDroid;
+	if (mission.type == LEVEL_TYPE::LDS_NONE)
+	{
+		return;
+	}
 
 	//add back any widgets that should be up due to the missions
 	if (mission.time > 0)
@@ -3059,27 +3121,9 @@ void resetMissionWidgets()
 	//check not a typical reinforcement mission
 	else if (!missionForReInforcements())
 	{
-		for (psDroid = apsDroidLists[selectedPlayer]; psDroid != nullptr; psDroid = psDroid->psNext)
+		if (auto transporter = find_transporter())
 		{
-			if (isTransporter(psDroid))
-			{
-				intAddTransporterLaunch(psDroid);
-				break;
-			}
-		}
-		/*if we got to the end without adding a transporter - there might be
-		one sitting in the mission list which is waiting to come back in*/
-		if (!psDroid)
-		{
-			for (psDroid = mission.apsDroidLists[selectedPlayer]; psDroid != nullptr; psDroid = psDroid->psNext)
-			{
-				if (isTransporter(psDroid) &&
-				    psDroid->action == DACTION_TRANSPORTWAITTOFLYIN)
-				{
-					intAddTransporterLaunch(psDroid);
-					break;
-				}
-			}
+			intAddTransporterLaunch(transporter);
 		}
 	}
 
@@ -3142,6 +3186,8 @@ mission ends. bOffWorld is true if the Mission is currently offWorld*/
 void emptyTransporters(bool bOffWorld)
 {
 	DROID       *psTransporter, *psDroid, *psNext, *psNextTrans;
+
+	ASSERT_OR_RETURN(, selectedPlayer < MAX_PLAYERS, "selectedPlayer %" PRIu32 " >= MAX_PLAYERS", selectedPlayer);
 
 	//see if there are any Transporters in the world
 	for (psTransporter = apsDroidLists[selectedPlayer]; psTransporter != nullptr; psTransporter = psNextTrans)

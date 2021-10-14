@@ -4,14 +4,18 @@ include("script/campaign/templates.js");
 const Y_SCROLL_LIMIT = 137;
 const LASSAT_FIRING = "pcv650.ogg"; // LASER SATELLITE FIRING!!!
 const NEXUS_RES = [
-	"R-Defense-WallUpgrade09", "R-Struc-Materials09", "R-Struc-Factory-Upgrade06",
-	"R-Struc-VTOLPad-Upgrade06", "R-Vehicle-Engine09", "R-Vehicle-Metals09",
-	"R-Cyborg-Metals09", "R-Vehicle-Armor-Heat06", "R-Cyborg-Armor-Heat06",
-	"R-Sys-Engineering03", "R-Vehicle-Prop-Hover02", "R-Vehicle-Prop-VTOL02",
-	"R-Wpn-Bomb-Damage03", "R-Wpn-Energy-Accuracy01", "R-Wpn-Energy-Damage03",
-	"R-Wpn-Energy-ROF03", "R-Wpn-Missile-Accuracy01", "R-Wpn-Missile-Damage02",
-	"R-Wpn-Rail-Accuracy01", "R-Wpn-Rail-Damage03", "R-Wpn-Rail-ROF03",
-	"R-Sys-Sensor-Upgrade01", "R-Sys-NEXUSrepair", "R-Wpn-Flamer-Damage06",
+	"R-Sys-Engineering03", "R-Defense-WallUpgrade10", "R-Struc-Materials10",
+	"R-Struc-VTOLPad-Upgrade06", "R-Wpn-Bomb-Damage03", "R-Sys-NEXUSrepair",
+	"R-Vehicle-Prop-Hover02", "R-Vehicle-Prop-VTOL02", "R-Cyborg-Legs02",
+	"R-Wpn-Mortar-Acc03", "R-Wpn-MG-Damage09", "R-Wpn-Mortar-ROF04",
+	"R-Vehicle-Engine09", "R-Vehicle-Metals10", "R-Vehicle-Armor-Heat07",
+	"R-Cyborg-Metals10", "R-Cyborg-Armor-Heat07", "R-Wpn-RocketSlow-ROF06",
+	"R-Wpn-AAGun-Damage06", "R-Wpn-AAGun-ROF06", "R-Wpn-Howitzer-Damage09",
+	"R-Wpn-Howitzer-ROF04", "R-Wpn-Cannon-Damage09", "R-Wpn-Cannon-ROF06",
+	"R-Wpn-Missile-Damage03", "R-Wpn-Missile-ROF03", "R-Wpn-Missile-Accuracy02",
+	"R-Wpn-Rail-Damage03", "R-Wpn-Rail-ROF03", "R-Wpn-Rail-Accuracy01",
+	"R-Wpn-Energy-Damage03", "R-Wpn-Energy-ROF03", "R-Wpn-Energy-Accuracy01",
+	"R-Wpn-AAGun-Accuracy03", "R-Wpn-Howitzer-Accuracy03",
 ];
 const VTOL_POSITIONS = [
 	"vtolAppearPosW", "vtolAppearPosE",
@@ -47,7 +51,7 @@ function randomTemplates(list)
 		droids.push(list[camRand(list.length)]);
 	}
 
-	//Vtol strike sensor and vindicator hovers.
+	//Sensor and vindicator hovers.
 	for (i = 0; i < 4; ++i)
 	{
 		droids.push(extras[camRand(extras.length)]);
@@ -109,8 +113,8 @@ function vaporizeTarget()
 	{
 		//Choose random coordinate within the limits.
 		target = {
-			"x": camRand(mapWidth),
-			"y": Y_SCROLL_LIMIT + camRand(mapHeight - Math.floor(mapLimit)),
+			x: camRand(mapWidth),
+			y: Y_SCROLL_LIMIT + camRand(mapHeight - Math.floor(mapLimit)),
 		};
 
 		if (target.y > Math.floor(mapLimit))
@@ -120,12 +124,17 @@ function vaporizeTarget()
 	}
 	else
 	{
-		var dr = targets.filter(function(obj) { return obj.type === DROID; });
+		var dr = targets.filter(function(obj) { return obj.type === DROID && !isVTOL(obj); });
+		var vt = targets.filter(function(obj) { return obj.type === DROID && isVTOL(obj); });
 		var st = targets.filter(function(obj) { return obj.type === STRUCTURE; });
 
 		if (dr.length)
 		{
 			target = dr[0];
+		}
+		if (vt.length && (camRand(100) < 15))
+		{
+			target = vt[0]; //don't care about VTOLs as much
 		}
 		if (st.length && !camRand(2)) //chance to focus on a structure
 		{
@@ -222,7 +231,7 @@ function eventResearched(research, structure, player)
 		if (research.name === videoInfo[i].res && !videoInfo[i].played)
 		{
 			videoInfo[i].played = true;
-			camPlayVideos(videoInfo[i].video);
+			camPlayVideos({video: videoInfo[i].video, type: videoInfo[i].type});
 			if (videoInfo[i].res === "R-Sys-Resistance")
 			{
 				enableResearch("R-Comp-MissileCodes01", CAM_HUMAN_PLAYER);
@@ -240,7 +249,7 @@ function checkTime()
 {
 	if (getMissionTime() <= 2)
 	{
-		camPlayVideos("MB3_AD2_MSG2");
+		camPlayVideos({video: "MB3_AD2_MSG2", type: CAMP_MSG});
 		setMissionTime(camHoursToSeconds(1));
 
 		phantomFactorySpawn();
@@ -275,10 +284,10 @@ function eventStartLevel()
 	mapLimit = 137.0;
 	winFlag = false;
 	videoInfo = [
-		{played: false, video: "MB3_AD2_MSG3", res: "R-Sys-Resistance"},
-		{played: false, video: "MB3_AD2_MSG4", res: "R-Comp-MissileCodes01"},
-		{played: false, video: "MB3_AD2_MSG5", res: "R-Comp-MissileCodes02"},
-		{played: false, video: "MB3_AD2_MSG6", res: "R-Comp-MissileCodes03"},
+		{played: false, video: "MB3_AD2_MSG3", type: MISS_MSG, res: "R-Sys-Resistance"},
+		{played: false, video: "MB3_AD2_MSG4", type: CAMP_MSG, res: "R-Comp-MissileCodes01"},
+		{played: false, video: "MB3_AD2_MSG5", type: CAMP_MSG, res: "R-Comp-MissileCodes02"},
+		{played: false, video: "MB3_AD2_MSG6", type: CAMP_MSG, res: "R-Comp-MissileCodes03"},
 	];
 
 	camSetStandardWinLossConditions(CAM_VICTORY_STANDARD, "CAM_3_4S", {
@@ -303,7 +312,7 @@ function eventStartLevel()
 	setNoGoArea(enemyLz.x, enemyLz.y, enemyLz.x2, enemyLz.y2, NEXUS);
 
 	camCompleteRequiredResearch(NEXUS_RES, NEXUS);
-	camPlayVideos("MB3_AD2_MSG");
+	camPlayVideos({video: "MB3_AD2_MSG", type: MISS_MSG});
 
 	setTimer("checkTime", camSecondsToMilliseconds(0.2));
 	queue("vtolAttack", camChangeOnDiff(camMinutesToMilliseconds(3)));

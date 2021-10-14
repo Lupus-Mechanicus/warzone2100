@@ -44,6 +44,7 @@
 
 #include "init.h"
 
+#include "input/manager.h"
 #include "advvis.h"
 #include "atmos.h"
 #include "challenge.h"
@@ -63,9 +64,9 @@
 #include "gateway.h"
 #include "hci.h"
 #include "intdisplay.h"
-#include "keymap.h"
 #include "levels.h"
 #include "lighting.h"
+#include "loadsave.h"
 #include "loop.h"
 #include "mapgrid.h"
 #include "mechanics.h"
@@ -92,9 +93,13 @@
 #include "qtscript.h"
 #include "template.h"
 #include "activity.h"
+#include "spectatorwidgets.h"
+#include "seqdisp.h"
+#include "version.h"
 
 #include <algorithm>
 #include <unordered_map>
+#include <array>
 
 static void initMiscVars();
 
@@ -106,6 +111,52 @@ char fileLoadBuffer[FILE_LOAD_BUFFER_SIZE];
 IMAGEFILE *FrontImages;
 
 static wzSearchPath *searchPathRegistry = nullptr;
+
+enum MODS_PATHS: size_t
+{
+	MODS_MUSIC,
+	MODS_GLOBAL,
+	MODS_AUTOLOAD,
+	MODS_CAMPAIGN,
+	MODS_MULTIPLAY,
+	MODS_PATHS_MAX
+};
+
+static std::string getFullModPath(MODS_PATHS type)
+{
+	switch (type)
+	{
+		case MODS_MUSIC:
+			return version_getVersionedModsFolderPath("music");
+		case MODS_GLOBAL:
+			return version_getVersionedModsFolderPath("global");
+		case MODS_AUTOLOAD:
+			return version_getVersionedModsFolderPath("autoload");
+		case MODS_CAMPAIGN:
+			return version_getVersionedModsFolderPath("campaign");
+		case MODS_MULTIPLAY:
+			return version_getVersionedModsFolderPath("multiplay");
+		case MODS_PATHS_MAX:
+			break;
+	}
+	return version_getVersionedModsFolderPath();
+}
+
+static std::array<std::string, MODS_PATHS_MAX> buildFullModsPaths()
+{
+	std::array<std::string, MODS_PATHS_MAX> result;
+	for (size_t i = 0; i < MODS_PATHS_MAX; ++i)
+	{
+		result[i] = getFullModPath(static_cast<MODS_PATHS>(i));
+	}
+	return result;
+}
+
+static const char* versionedModsPath(MODS_PATHS type)
+{
+	static std::array<std::string, MODS_PATHS_MAX> cachedFullModsPaths = buildFullModsPaths();
+	return cachedFullModsPaths[type].c_str();
+}
 
 // Each module in the game should have a call from here to initialise
 // any globals and statics to there default values each time the game
@@ -282,13 +333,12 @@ bool rebuildSearchPath(searchPathMode mode, bool force, const char *current_map)
 #endif // DEBUG
 				// Remove maps and mods
 				removeSubdirs(curSearchPath->path, "maps");
-				removeSubdirs(curSearchPath->path, "mods/music");
-				removeSubdirs(curSearchPath->path, "mods/global");
-				removeSubdirs(curSearchPath->path, "mods");
-				removeSubdirs(curSearchPath->path, "mods/autoload");
-				removeSubdirs(curSearchPath->path, "mods/campaign");
-				removeSubdirs(curSearchPath->path, "mods/multiplay");
-				removeSubdirs(curSearchPath->path, "mods/downloads");
+				removeSubdirs(curSearchPath->path, versionedModsPath(MODS_MUSIC));
+				removeSubdirs(curSearchPath->path, versionedModsPath(MODS_GLOBAL));
+				removeSubdirs(curSearchPath->path, versionedModsPath(MODS_AUTOLOAD));
+				removeSubdirs(curSearchPath->path, versionedModsPath(MODS_CAMPAIGN));
+				removeSubdirs(curSearchPath->path, versionedModsPath(MODS_MULTIPLAY));
+				removeSubdirs(curSearchPath->path, "mods/downloads"); // not versioned
 
 				// Remove multiplay patches
 				sstrcpy(tmpstr, curSearchPath->path);
@@ -341,11 +391,10 @@ bool rebuildSearchPath(searchPathMode mode, bool force, const char *current_map)
 				// Add global and campaign mods
 				PHYSFS_mount(curSearchPath->path, NULL, PHYSFS_APPEND);
 
-				addSubdirs(curSearchPath->path, "mods/music", PHYSFS_APPEND, nullptr, false);
-				addSubdirs(curSearchPath->path, "mods/global", PHYSFS_APPEND, use_override_mods ? &override_mods : &global_mods, true);
-				addSubdirs(curSearchPath->path, "mods", PHYSFS_APPEND, use_override_mods ? &override_mods : &global_mods, true);
-				addSubdirs(curSearchPath->path, "mods/autoload", PHYSFS_APPEND, use_override_mods ? &override_mods : nullptr, true);
-				addSubdirs(curSearchPath->path, "mods/campaign", PHYSFS_APPEND, use_override_mods ? &override_mods : &campaign_mods, true);
+				addSubdirs(curSearchPath->path, versionedModsPath(MODS_MUSIC), PHYSFS_APPEND, nullptr, false);
+				addSubdirs(curSearchPath->path, versionedModsPath(MODS_GLOBAL), PHYSFS_APPEND, use_override_mods ? &override_mods : &global_mods, true);
+				addSubdirs(curSearchPath->path, versionedModsPath(MODS_AUTOLOAD), PHYSFS_APPEND, use_override_mods ? &override_mods : nullptr, true);
+				addSubdirs(curSearchPath->path, versionedModsPath(MODS_CAMPAIGN), PHYSFS_APPEND, use_override_mods ? &override_mods : &campaign_mods, true);
 				if (!WZ_PHYSFS_unmount(curSearchPath->path))
 				{
 					debug(LOG_WZ, "* Failed to remove path %s again", curSearchPath->path);
@@ -396,15 +445,14 @@ bool rebuildSearchPath(searchPathMode mode, bool force, const char *current_map)
 #endif // DEBUG
 				// Add global and multiplay mods
 				PHYSFS_mount(curSearchPath->path, NULL, PHYSFS_APPEND);
-				addSubdirs(curSearchPath->path, "mods/music", PHYSFS_APPEND, nullptr, false);
+				addSubdirs(curSearchPath->path, versionedModsPath(MODS_MUSIC), PHYSFS_APPEND, nullptr, false);
 
 				// Only load if we are host or singleplayer (Initial mod load relies on this, too)
 				if (ingame.side == InGameSide::HOST_OR_SINGLEPLAYER || !NetPlay.bComms)
 				{
-					addSubdirs(curSearchPath->path, "mods/global", PHYSFS_APPEND, use_override_mods ? &override_mods : &global_mods, true);
-					addSubdirs(curSearchPath->path, "mods", PHYSFS_APPEND, use_override_mods ? &override_mods : &global_mods, true);
-					addSubdirs(curSearchPath->path, "mods/autoload", PHYSFS_APPEND, use_override_mods ? &override_mods : nullptr, true);
-					addSubdirs(curSearchPath->path, "mods/multiplay", PHYSFS_APPEND, use_override_mods ? &override_mods : &multiplay_mods, true);
+					addSubdirs(curSearchPath->path, versionedModsPath(MODS_GLOBAL), PHYSFS_APPEND, use_override_mods ? &override_mods : &global_mods, true);
+					addSubdirs(curSearchPath->path, versionedModsPath(MODS_AUTOLOAD), PHYSFS_APPEND, use_override_mods ? &override_mods : nullptr, true);
+					addSubdirs(curSearchPath->path, versionedModsPath(MODS_MULTIPLAY), PHYSFS_APPEND, use_override_mods ? &override_mods : &multiplay_mods, true);
 				}
 				else
 				{
@@ -412,7 +460,7 @@ bool rebuildSearchPath(searchPathMode mode, bool force, const char *current_map)
 					for (Sha256 &hash : game.modHashes)
 					{
 						hashList = {hash.toString()};
-						addSubdirs(curSearchPath->path, "mods/downloads", PHYSFS_APPEND, &hashList, true);
+						addSubdirs(curSearchPath->path, "mods/downloads", PHYSFS_APPEND, &hashList, true); // not versioned
 					}
 				}
 				WZ_PHYSFS_unmount(curSearchPath->path);
@@ -460,6 +508,8 @@ bool rebuildSearchPath(searchPathMode mode, bool force, const char *current_map)
 #ifdef DEBUG
 		printSearchPath();
 #endif // DEBUG
+
+		ActivityManager::instance().rebuiltSearchPath();
 	}
 	else if (use_override_mods)
 	{
@@ -515,7 +565,7 @@ static MapFileList listMapFiles()
 		if (PHYSFS_mount(realFilePathAndName.c_str(), NULL, PHYSFS_APPEND))
 		{
 			int unsafe = 0;
-			WZ_PHYSFS_enumerateFiles("multiplay/maps", [&unsafe, &realFilePathAndName](const char *file) -> bool {
+			bool enumSuccess = WZ_PHYSFS_enumerateFiles("multiplay/maps", [&unsafe, &realFilePathAndName](const char *file) -> bool {
 				std::string isDir = std::string("multiplay/maps/") + file;
 				if (WZ_PHYSFS_isDirectory(isDir.c_str()))
 				{
@@ -533,6 +583,12 @@ static MapFileList listMapFiles()
 				}
 				return true; // continue
 			});
+			if (!enumSuccess)
+			{
+				// Failed to enumerate contents - corrupt map archive (ignore it)
+				debug(LOG_ERROR, "Failed to enumerate - ignoring corrupt map file: %s", realFilePathAndName.c_str());
+				unsafe = std::numeric_limits<int>::max() - 1;
+			}
 			if (unsafe < 2)
 			{
 				filtered.push_back(realFileName);
@@ -635,7 +691,8 @@ static std::pair<bool, bool> CheckInMap(const char *archive, const char *mountpo
 					|| checkfile.compare("audio") == 0 || checkfile.compare("sequenceaudio") == 0 || checkfile.compare("misc") == 0
 					|| checkfile.compare("features") == 0 || checkfile.compare("script") == 0 || checkfile.compare("structs") == 0
 					|| checkfile.compare("tileset") == 0 || checkfile.compare("images") == 0 || checkfile.compare("texpages") == 0
-					|| checkfile.compare("skirmish") == 0)
+					|| checkfile.compare("skirmish") == 0 || checkfile.compare("shaders") == 0 || checkfile.compare("fonts") == 0
+					|| checkfile.compare("icons") == 0)
 				{
 					debug(LOG_WZ, "Detected: %s %s" , archive, checkfile.c_str());
 					mapmod = true;
@@ -684,9 +741,13 @@ bool buildMapList()
 		}
 		std::string realFilePathAndName = pRealDirStr + realFileName.platformDependent;
 
-		PHYSFS_mount(realFilePathAndName.c_str(), NULL, PHYSFS_APPEND);
+		if (PHYSFS_mount(realFilePathAndName.c_str(), NULL, PHYSFS_APPEND) == 0)
+		{
+			debug(LOG_POPUP, "Could not mount %s, because: %s.\nPlease delete or move the file specified.", realFilePathAndName.c_str(), WZ_PHYSFS_getLastError());
+			continue; // skip
+		}
 
-		WZ_PHYSFS_enumerateFiles("", [&](const char *file) -> bool {
+		bool enumSuccess = WZ_PHYSFS_enumerateFiles("", [&](const char *file) -> bool {
 			size_t len = strlen(file);
 			if (len > 10 && !strcasecmp(file + (len - 10), ".addon.lev"))  // Do not add addon.lev again
 			{
@@ -703,6 +764,11 @@ bool buildMapList()
 		if (WZ_PHYSFS_unmount(realFilePathAndName.c_str()) == 0)
 		{
 			debug(LOG_ERROR, "Could not unmount %s, %s", realFilePathAndName.c_str(), WZ_PHYSFS_getLastError());
+		}
+		if (!enumSuccess)
+		{
+			// Failed to enumerate contents - corrupt map archive
+			debug(LOG_ERROR, "Failed to enumerate - corrupt map file: %s", realFilePathAndName.c_str());
 		}
 
 		auto chk = CheckInMap(realFilePathAndName.c_str(), "WZMap", lookin_list);
@@ -776,13 +842,15 @@ bool systemInitialise(float horizScaleFactor, float vertScaleFactor)
 //
 void systemShutdown()
 {
+	seqReleaseAll();
+
 	pie_ShutdownRadar();
 	clearLoadedMods();
 	flushConsoleMessages();
 
 	shutdownEffectsSystem();
 	wzSceneEnd(nullptr);  // Might want to end the "Main menu loop" or "Main game loop".
-	keyMappings.clear();
+	gInputManager.shutdown();
 
 	// free up all the load functions (all the data should already have been freed)
 	resReleaseAll();
@@ -875,7 +943,7 @@ bool frontendInitialise(const char *ResourceFile)
 	}
 
 	// reinitialise key mappings
-	keyInitMappings(false);
+	gInputManager.resetMappings(false, gKeyFuncConfig);
 
 	// Set the default uncoloured cursor here, since it looks slightly
 	// better for menus and such.
@@ -905,6 +973,15 @@ bool frontendShutdown()
 		return false;
 	}
 
+	changeTitleUI(nullptr);
+	if (challengesUp)
+	{
+		closeChallenges(); // TODO: Ideally this would not be required here (refactor challenge.cpp / frontend.cpp?)
+	}
+	if (bLoadSaveUp)
+	{
+		closeLoadSaveOnShutdown(); // TODO: Ideally this would not be required here (refactor loadsave.cpp / frontend.cpp?)
+	}
 	interfaceShutDown();
 
 	//do this before shutting down the iV library
@@ -1131,7 +1208,7 @@ bool stageTwoInitialise()
 	}
 
 	// reinitialise key mappings
-	keyInitMappings(false);
+	gInputManager.resetMappings(false, gKeyFuncConfig);
 
 	// Set the default uncoloured cursor here, since it looks slightly
 	// better for menus and such.
@@ -1143,13 +1220,16 @@ bool stageTwoInitialise()
 	// Don't ask why this doesn't go in stage three. In fact, don't even ask me what stage one/two/three is supposed to mean, it seems about as descriptive as stage doStuff, stage doMoreStuff and stage doEvenMoreStuff...
 	debug(LOG_MAIN, "Init game queues, I am %d.", selectedPlayer);
 	sendQueuedDroidInfo();  // Discard any pending orders which could later get flushed into the game queue.
-	for (i = 0; i < MAX_PLAYERS; ++i)
+	if (!NETisReplay())
 	{
-		NETinitQueue(NETgameQueue(i));
-
-		if (!myResponsibility(i))
+		for (i = 0; i < MAX_CONNECTED_PLAYERS; ++i)
 		{
-			NETsetNoSendOverNetwork(NETgameQueue(i));
+			NETinitQueue(NETgameQueue(i));
+
+			if (!myResponsibility(i))
+			{
+				NETsetNoSendOverNetwork(NETgameQueue(i));
+			}
 		}
 	}
 
@@ -1305,7 +1385,7 @@ bool stageThreeInitialise()
 				/* Structures */
 				for (psStr = apsStructLists[i]; psStr; psStr = psStr->psNext)
 				{
-					if (aiCheckAlliances(psStr->player, selectedPlayer))
+					if (selectedPlayer < MAX_PLAYERS && aiCheckAlliances(psStr->player, selectedPlayer))
 					{
 						visTilesUpdate((BASE_OBJECT *)psStr);
 					}
@@ -1314,7 +1394,7 @@ bool stageThreeInitialise()
 				/* Droids */
 				for (psDroid = apsDroidLists[i]; psDroid; psDroid = psDroid->psNext)
 				{
-					if (aiCheckAlliances(psDroid->player, selectedPlayer))
+					if (selectedPlayer < MAX_PLAYERS && aiCheckAlliances(psDroid->player, selectedPlayer))
 					{
 						visTilesUpdate((BASE_OBJECT *)psDroid);
 					}
@@ -1331,7 +1411,8 @@ bool stageThreeInitialise()
 	}
 	else
 	{
-		if (getDebugMappingStatus())
+		const DebugInputManager& dbgInputManager = gInputManager.debugManager();
+		if (dbgInputManager.debugMappingsAllowed())
 		{
 			triggerEventCheatMode(true);
 		}
@@ -1362,6 +1443,8 @@ bool stageThreeShutDown()
 	{
 		return false;
 	}
+
+	specStatsViewShutdown();
 
 	challengesUp = false;
 	challengeActive = false;
@@ -1447,8 +1530,9 @@ static void initMiscVars()
 	includeRedundantDesigns = false;
 	enableConsoleDisplay(true);
 
+	DebugInputManager& dbgInputManager = gInputManager.debugManager();
 	for (unsigned n = 0; n < MAX_PLAYERS; ++n)
 	{
-		processDebugMappings(n, false);
+		dbgInputManager.setPlayerWantsDebugMappings(n, false);
 	}
 }

@@ -16,7 +16,7 @@ camAreaEvent("vtolRemoveZone", function(droid)
 //Attack and destroy all those who resist the Machine! -The Collective
 function secondVideo()
 {
-	camPlayVideos("MB2A_MSG2");
+	camPlayVideos({video: "MB2A_MSG2", type: CAMP_MSG});
 }
 
 //Damage the base and droids for the player
@@ -56,7 +56,7 @@ function getDroidsForCOLZ()
 	}
 	else
 	{
-		templates = [cTempl.cohct, cTempl.comct, cTempl.comorb];
+		templates = [cTempl.cohct, cTempl.commrl, cTempl.comorb];
 		usingHeavy = true;
 	}
 
@@ -132,7 +132,7 @@ function sendPlayerTransporter()
 function mapEdgeDroids()
 {
 	var TankNum = 8 + camRand(6);
-	var list = [cTempl.npcybm, cTempl.npcybr, cTempl.comct, cTempl.cohct];
+	var list = [cTempl.npcybm, cTempl.npcybr, cTempl.commrp, cTempl.cohct];
 
 	var droids = [];
 	for (var i = 0; i < TankNum; ++i)
@@ -180,41 +180,36 @@ function truckDefense()
 		return;
 	}
 
-	const DEFENSES = ["CO-Tower-LtATRkt", "PillBox1", "CO-Tower-MdCan"];
+	const DEFENSES = ["CO-Tower-LtATRkt", "PillBox1", "CO-WallTower-HvCan"];
 	camQueueBuilding(THE_COLLECTIVE, DEFENSES[camRand(DEFENSES.length)]);
 }
 
 //Gives starting tech and research.
 function cam2Setup()
 {
-	var x = 0;
 	const COLLECTIVE_RES = [
 		"R-Wpn-MG1Mk1", "R-Sys-Engineering02",
-		"R-Defense-WallUpgrade03", "R-Struc-Materials03",
-		"R-Struc-Factory-Upgrade03",
+		"R-Defense-WallUpgrade06", "R-Struc-Materials06",
 		"R-Vehicle-Engine03", "R-Vehicle-Metals03", "R-Cyborg-Metals03",
-		"R-Wpn-Cannon-Accuracy01", "R-Wpn-Cannon-Damage03",
+		"R-Wpn-Cannon-Accuracy02", "R-Wpn-Cannon-Damage04",
 		"R-Wpn-Cannon-ROF01", "R-Wpn-Flamer-Damage03", "R-Wpn-Flamer-ROF01",
-		"R-Wpn-MG-Damage04", "R-Wpn-MG-ROF02", "R-Wpn-Mortar-Acc01",
+		"R-Wpn-MG-Damage05", "R-Wpn-MG-ROF02", "R-Wpn-Mortar-Acc01",
 		"R-Wpn-Mortar-Damage03", "R-Wpn-Mortar-ROF01",
-		"R-Wpn-Rocket-Accuracy02", "R-Wpn-Rocket-Damage03",
+		"R-Wpn-Rocket-Accuracy02", "R-Wpn-Rocket-Damage04",
 		"R-Wpn-Rocket-ROF03", "R-Wpn-RocketSlow-Accuracy03",
-		"R-Wpn-RocketSlow-Damage03", "R-Sys-Sensor-Upgrade01"
+		"R-Wpn-RocketSlow-Damage04", "R-Sys-Sensor-Upgrade01"
 	];
 
-	for (x = 0; x < ALPHA_TECH.length; ++x)
-	{
-		makeComponentAvailable(ALPHA_TECH[x], CAM_HUMAN_PLAYER);
-	}
-
-	for (x = 0; x < STRUCTS_ALPHA.length; ++x)
+	for (var x = 0, l = STRUCTS_ALPHA.length; x < l; ++x)
 	{
 		enableStructure(STRUCTS_ALPHA[x], CAM_HUMAN_PLAYER);
 	}
 
 	camCompleteRequiredResearch(PLAYER_RES_BETA, CAM_HUMAN_PLAYER);
+	camCompleteRequiredResearch(ALPHA_RESEARCH_NEW, THE_COLLECTIVE);
 	camCompleteRequiredResearch(COLLECTIVE_RES, THE_COLLECTIVE);
-	camCompleteRequiredResearch(ALPHA_RESEARCH, CAM_HUMAN_PLAYER);
+	camCompleteRequiredResearch(ALPHA_RESEARCH_NEW, CAM_HUMAN_PLAYER);
+
 	enableResearch("R-Wpn-Cannon-Damage04", CAM_HUMAN_PLAYER);
 	enableResearch("R-Wpn-Rocket-Damage04", CAM_HUMAN_PLAYER);
 	preDamageStuff();
@@ -341,7 +336,7 @@ function eventStartLevel()
 	camManageTrucks(THE_COLLECTIVE);
 	truckDefense();
 	setUnitRank(); //All pre-placed player droids are ranked.
-	camPlayVideos("MB2A_MSG");
+	camPlayVideos({video: "MB2A_MSG", type: MISS_MSG});
 	startedFromMenu = false;
 
 	//Only if starting Beta directly rather than going through Alpha
@@ -359,7 +354,7 @@ function eventStartLevel()
 	queue("secondVideo", camSecondsToMilliseconds(12));
 	queue("groupPatrol", camChangeOnDiff(camMinutesToMilliseconds(1)));
 	queue("vtolAttack", camChangeOnDiff(camMinutesToMilliseconds(3)));
-	setTimer("truckDefense", camSecondsToMilliseconds(160));
+	setTimer("truckDefense", camChangeOnDiff(camMinutesToMilliseconds(3)));
 	setTimer("sendCOTransporter", camChangeOnDiff(camMinutesToMilliseconds(4)));
 	setTimer("mapEdgeDroids", camChangeOnDiff(camMinutesToMilliseconds(7)));
 }

@@ -32,7 +32,9 @@
 #include "lib/framework/vector.h"
 #include "gamedef.h"
 #include "levels.h"
-
+#include <3rdparty/json/json_fwd.hpp>
+#include <optional-lite/optional.hpp>
+#include <sstream>
 /***************************************************************************/
 /*
  *	Global ProtoTypes
@@ -51,7 +53,7 @@ bool loadMissionExtras(const char* pGameToLoad, LEVEL_TYPE levelType);
 bool loadScriptState(char *pFileName);
 
 /// Load the terrain types
-bool loadTerrainTypeMap(char *pFileData, UDWORD filesize);
+bool loadTerrainTypeMap(const char *pFilePath);
 bool loadTerrainTypeMapOverride(unsigned int tileSet);
 
 bool saveGame(const char *aFileName, GAME_TYPE saveType);
@@ -62,11 +64,8 @@ UDWORD getCampaign(const char *fileName);
 /*returns the current type of save game being loaded*/
 GAME_TYPE getSaveGameType();
 
-struct ScriptMapData;
-bool plotStructurePreviewScript(ScriptMapData const &data, char *backDropSprite, Vector2i playeridpos[]);
-bool plotStructurePreview16(char *backDropSprite, Vector2i playeridpos[]);
-
 void gameScreenSizeDidChange(unsigned int oldWidth, unsigned int oldHeight, unsigned int newWidth, unsigned int newHeight);
 void gameDisplayScaleFactorDidChange(float newDisplayScaleFactor);
-
+nonstd::optional<nlohmann::json> parseJsonFile(const char *filename);
+bool saveJSONToFile(const nlohmann::json& obj, const char* pFileName);
 #endif // __INCLUDED_SRC_GAME_H__

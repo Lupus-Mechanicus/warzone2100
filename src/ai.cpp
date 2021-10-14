@@ -831,11 +831,6 @@ bool aiChooseTarget(BASE_OBJECT *psObj, BASE_OBJECT **ppsTarget, int weapon_slot
 		*targetOrigin = ORIGIN_UNKNOWN;
 	}
 
-	if (psObj->type == OBJ_DROID && secondaryGetState((DROID *)psObj, DSO_HALTTYPE) == DSS_HALT_HOLD)
-	{
-		return false;	// Not sure why we check this here...
-	}
-
 	ASSERT_OR_RETURN(false, (unsigned)weapon_slot < psObj->numWeaps, "Invalid weapon selected");
 
 	/* See if there is a something in range */
@@ -1148,7 +1143,9 @@ void aiUpdateDroid(DROID *psDroid)
 	}
 
 	// don't allow units to start attacking if they will switch to guarding the commander
-	if (hasCommander(psDroid))
+	// except for sensors: they still look for targets themselves, because
+	// they have wider view
+	if (hasCommander(psDroid) && psDroid->droidType != DROID_SENSOR)
 	{
 		lookForTarget = false;
 		updateTarget = false;

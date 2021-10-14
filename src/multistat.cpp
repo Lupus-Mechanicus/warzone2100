@@ -25,6 +25,8 @@
  * load / update / store multiplayer statistics for league tables etc...
  */
 
+#include <3rdparty/json/json.hpp> // Must come before WZ includes
+
 #include "lib/framework/file.h"
 #include "lib/framework/frame.h"
 #include "lib/framework/wzapp.h"
@@ -45,7 +47,7 @@
 // ////////////////////////////////////////////////////////////////////////////
 // STATS STUFF
 // ////////////////////////////////////////////////////////////////////////////
-static PLAYERSTATS playerStats[MAX_PLAYERS];
+static PLAYERSTATS playerStats[MAX_CONNECTED_PLAYERS];
 
 
 // ////////////////////////////////////////////////////////////////////////////
@@ -109,34 +111,43 @@ void lookupRatingAsync(uint32_t playerIndex)
 	req.url = url;
 	debug(LOG_INFO, "Requesting \"%s\"", req.url.c_str());
 	req.onSuccess = [playerIndex, hash](std::string const &url, HTTPResponseDetails const &response, std::shared_ptr<MemoryStruct> const &data) {
-		wzAsyncExecOnMainThread([playerIndex, hash, url, response, data] {
-			if (response.httpStatusCode() != 200 || !data || data->size == 0)
-			{
-				debug(LOG_WARNING, "Failed to retrieve data from \"%s\", got [%ld].", url.c_str(), response.httpStatusCode());
-				return;
-			}
+		long httpStatusCode = response.httpStatusCode();
+		std::string urlCopy = url;
+		if (httpStatusCode != 200 || !data || data->size == 0)
+		{
+			wzAsyncExecOnMainThread([urlCopy, httpStatusCode] {
+				debug(LOG_WARNING, "Failed to retrieve data from \"%s\", got [%ld].", urlCopy.c_str(), httpStatusCode);
+			});
+			return;
+		}
+
+		std::shared_ptr<MemoryStruct> dataCopy = data;
+		wzAsyncExecOnMainThread([playerIndex, hash, urlCopy, dataCopy] {
 			if (playerStats[playerIndex].identity.publicHashString() != hash)
 			{
-				debug(LOG_WARNING, "Got data from \"%s\", but player is already gone.", url.c_str());
+				debug(LOG_WARNING, "Got data from \"%s\", but player is already gone.", urlCopy.c_str());
 				return;
 			}
 			try {
-				playerStats[playerIndex].autorating = nlohmann::json::parse(data->memory, data->memory + data->size);
+				playerStats[playerIndex].autorating = nlohmann::json::parse(dataCopy->memory, dataCopy->memory + dataCopy->size);
 				if (playerStats[playerIndex].autorating.valid)
 				{
 					setMultiStats(playerIndex, playerStats[playerIndex], false);
 				}
 			}
 			catch (const std::exception &e) {
-				debug(LOG_WARNING, "JSON document from \"%s\" is invalid: %s", url.c_str(), e.what());
+				debug(LOG_WARNING, "JSON document from \"%s\" is invalid: %s", urlCopy.c_str(), e.what());
 			}
 			catch (...) {
-				debug(LOG_FATAL, "Unexpected exception parsing JSON \"%s\"", url.c_str());
+				debug(LOG_FATAL, "Unexpected exception parsing JSON \"%s\"", urlCopy.c_str());
 			}
 		});
 	};
 	req.onFailure = [](std::string const &url, WZ_DECL_UNUSED URLRequestFailureType type, WZ_DECL_UNUSED optional<HTTPResponseDetails> transferDetails) {
-		debug(LOG_WARNING, "Failure fetching \"%s\".", url.c_str());
+		std::string urlCopy = url;
+		wzAsyncExecOnMainThread([urlCopy] {
+			debug(LOG_WARNING, "Failure fetching \"%s\".", urlCopy.c_str());
+		});
 	};
 	req.maxDownloadSizeLimit = 4096;
 	urlRequestData(req);
@@ -147,7 +158,7 @@ void lookupRatingAsync(uint32_t playerIndex)
 // send stats to all players when bLocal is false
 bool setMultiStats(uint32_t playerIndex, PLAYERSTATS plStats, bool bLocal)
 {
-	if (playerIndex >= MAX_PLAYERS)
+	if (playerIndex >= MAX_CONNECTED_PLAYERS)
 	{
 		return true;
 	}
@@ -172,6 +183,7 @@ bool setMultiStats(uint32_t playerIndex, PLAYERSTATS plStats, bool bLocal)
 		NETuint32_t(&playerStats[playerIndex].totalScore);
 		NETuint32_t(&playerStats[playerIndex].recentKills);
 		NETuint32_t(&playerStats[playerIndex].recentScore);
+		NETuint64_t(&playerStats[playerIndex].recentPowerLost);
 
 		EcKey::Key identity;
 		if (!playerStats[playerIndex].identity.empty())
@@ -194,14 +206,14 @@ void recvMultiStats(NETQUEUE queue)
 	// update the stats
 	NETuint32_t(&playerIndex);
 
-	if (playerIndex >= MAX_PLAYERS)
+	if (playerIndex >= MAX_CONNECTED_PLAYERS)
 	{
 		NETend();
 		return;
 	}
 
 
-	if (playerIndex != queue.index && queue.index != NET_HOST_ONLY)
+	if (playerIndex != queue.index && queue.index != NetPlay.hostPlayer)
 	{
 		HandleBadParam("NET_PLAYER_STATS given incorrect params.", playerIndex, queue.index);
 		NETend();
@@ -221,6 +233,7 @@ void recvMultiStats(NETQUEUE queue)
 		NETuint32_t(&playerStats[playerIndex].totalScore);
 		NETuint32_t(&playerStats[playerIndex].recentKills);
 		NETuint32_t(&playerStats[playerIndex].recentScore);
+		NETuint64_t(&playerStats[playerIndex].recentPowerLost);
 
 		EcKey::Key identity;
 		NETbytes(&identity);
@@ -237,6 +250,7 @@ void recvMultiStats(NETQUEUE queue)
 		if (identity != prevIdentity)
 		{
 			ingame.PingTimes[playerIndex] = PING_LIMIT;
+			ingame.VerifiedIdentity[playerIndex] = false;
 		}
 	}
 	NETend();
@@ -330,6 +344,7 @@ bool loadMultiStats(char *sPlayerName, PLAYERSTATS *st)
 	// reset recent scores
 	st->recentKills = 0;
 	st->recentScore = 0;
+	st->recentPowerLost = 0;
 
 	// clear any skirmish stats.
 	for (size_t size = 0; size < MAX_PLAYERS; size++)
@@ -367,26 +382,31 @@ bool saveMultiStats(const char *sFileName, const char *sPlayerName, const PLAYER
 // update players damage stats.
 void updateMultiStatsDamage(UDWORD attacker, UDWORD defender, UDWORD inflicted)
 {
-	// damaging features like skyscrapers does not count
-	if (defender != PLAYER_FEATURE)
+	if (defender == PLAYER_FEATURE)
 	{
-		if (NetPlay.bComms)
+		// damaging features like skyscrapers does not count
+		return;
+	}
+
+	ASSERT_OR_RETURN(, attacker < MAX_PLAYERS, "invalid attacker: %" PRIu32 "", attacker);
+	ASSERT_OR_RETURN(, defender < MAX_PLAYERS, "invalid defender: %" PRIu32 "", defender);
+
+	if (NetPlay.bComms)
+	{
+		// killing and getting killed by scavengers does not influence scores in MP games
+		if (attacker != scavengerSlot() && defender != scavengerSlot())
 		{
-			// killing and getting killed by scavengers does not influence scores in MP games
-			if (attacker != scavengerSlot() && defender != scavengerSlot())
-			{
-				// FIXME: Why in the world are we using two different structs for stats when we can use only one?
-				playerStats[attacker].totalScore  += 2 * inflicted;
-				playerStats[attacker].recentScore += 2 * inflicted;
-				playerStats[defender].totalScore  -= inflicted;
-				playerStats[defender].recentScore -= inflicted;
-			}
+			// FIXME: Why in the world are we using two different structs for stats when we can use only one?
+			playerStats[attacker].totalScore  += 2 * inflicted;
+			playerStats[attacker].recentScore += 2 * inflicted;
+			playerStats[defender].totalScore  -= inflicted;
+			playerStats[defender].recentScore -= inflicted;
 		}
-		else
-		{
-			ingame.skScores[attacker][0] += 2 * inflicted;  // increment skirmish players rough score.
-			ingame.skScores[defender][0] -= inflicted;  // increment skirmish players rough score.
-		}
+	}
+	else
+	{
+		ingame.skScores[attacker][0] += 2 * inflicted;  // increment skirmish players rough score.
+		ingame.skScores[defender][0] -= inflicted;  // increment skirmish players rough score.
 	}
 }
 
@@ -420,6 +440,27 @@ void updateMultiStatsLoses()
 	++playerStats[selectedPlayer].losses;
 }
 
+static inline uint32_t calcObjectCost(const BASE_OBJECT *psObj)
+{
+	switch (psObj->type)
+	{
+		case OBJ_DROID:
+			return calcDroidPower((const DROID *)psObj);
+		case OBJ_STRUCTURE:
+		{
+			auto psStruct = static_cast<const STRUCTURE *>(psObj);
+			ASSERT_OR_RETURN(0, psStruct->pStructureType != nullptr, "pStructureType is null?");
+			return psStruct->pStructureType->powerToBuild;
+		}
+		case OBJ_FEATURE:
+			return 0;
+		default:
+			ASSERT(false, "No such supported object type: %d", static_cast<int>(psObj->type));
+			break;
+	}
+	return 0;
+}
+
 // update kills
 void updateMultiStatsKills(BASE_OBJECT *psKilled, UDWORD player)
 {
@@ -433,6 +474,10 @@ void updateMultiStatsKills(BASE_OBJECT *psKilled, UDWORD player)
 				// FIXME: Why in the world are we using two different structs for stats when we can use only one?
 				++playerStats[player].totalKills;
 				++playerStats[player].recentKills;
+				if (psKilled->player < MAX_PLAYERS)
+				{
+					playerStats[psKilled->player].recentPowerLost += static_cast<uint64_t>(calcObjectCost(psKilled));
+				}
 			}
 		}
 		else
@@ -648,4 +693,93 @@ uint32_t getSelectedPlayerUnitsKilled()
 	{
 		return missionData.unitsKilled;
 	}
+}
+
+// MARK: -
+
+inline void to_json(nlohmann::json& j, const EcKey& k) {
+	if (k.empty())
+	{
+		j = "";
+		return;
+	}
+	auto publicKeyBytes = k.toBytes(EcKey::Public);
+	std::string publicKeyB64Str = base64Encode(publicKeyBytes);
+	j = publicKeyB64Str;
+}
+
+inline void from_json(const nlohmann::json& j, EcKey& k) {
+	std::string publicKeyB64Str = j.get<std::string>();
+	if (publicKeyB64Str.empty())
+	{
+		k.clear();
+		return;
+	}
+	EcKey::Key publicKeyBytes = base64Decode(publicKeyB64Str);
+	k.fromBytes(publicKeyBytes, EcKey::Public);
+}
+
+inline void to_json(nlohmann::json& j, const PLAYERSTATS& p) {
+	j = nlohmann::json::object();
+	j["played"] = p.played;
+	j["wins"] = p.wins;
+	j["losses"] = p.losses;
+	j["totalKills"] = p.totalKills;
+	j["totalScore"] = p.totalScore;
+	j["recentKills"] = p.recentKills;
+	j["recentScore"] = p.recentScore;
+	j["recentPowerLost"] = p.recentPowerLost;
+	j["identity"] = p.identity;
+}
+
+inline void from_json(const nlohmann::json& j, PLAYERSTATS& k) {
+	k.played = j.at("played").get<uint32_t>();
+	k.wins = j.at("wins").get<uint32_t>();
+	k.losses = j.at("losses").get<uint32_t>();
+	k.totalKills = j.at("totalKills").get<uint32_t>();
+	k.totalScore = j.at("totalScore").get<uint32_t>();
+	k.recentKills = j.at("recentKills").get<uint32_t>();
+	k.recentScore = j.at("recentScore").get<uint32_t>();
+	k.recentPowerLost = j.at("recentPowerLost").get<uint64_t>();
+	k.identity = j.at("identity").get<EcKey>();
+}
+
+bool saveMultiStatsToJSON(nlohmann::json& json)
+{
+	json = nlohmann::json::array();
+
+	for (size_t idx = 0; idx < MAX_CONNECTED_PLAYERS; idx++)
+	{
+		json.push_back(playerStats[idx]);
+	}
+
+	return true;
+}
+
+bool loadMultiStatsFromJSON(const nlohmann::json& json)
+{
+	if (!json.is_array())
+	{
+		debug(LOG_ERROR, "Expecting an array");
+		return false;
+	}
+	if (json.size() > MAX_CONNECTED_PLAYERS)
+	{
+		debug(LOG_ERROR, "Array size is too large: %zu", json.size());
+		return false;
+	}
+
+	for (size_t idx = 0; idx < json.size(); idx++)
+	{
+		playerStats[idx] = json.at(idx).get<PLAYERSTATS>();
+	}
+
+	// clear any skirmish stats.
+	for (size_t size = 0; size < MAX_PLAYERS; size++)
+	{
+		ingame.skScores[size][0] = 0;
+		ingame.skScores[size][1] = 0;
+	}
+
+	return true;
 }

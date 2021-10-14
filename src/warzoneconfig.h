@@ -102,8 +102,6 @@ bool war_GetRadarJump();
 void war_SetRadarJump(bool radarJump);
 int war_GetCameraSpeed();
 void war_SetCameraSpeed(int cameraSpeed);
-int war_GetScrollEvent();
-void war_SetScrollEvent(int scrollEvent);
 int8_t war_GetSPcolor();
 void war_SetSPcolor(int color);
 void war_setMPcolour(int colour);
@@ -116,6 +114,10 @@ JS_BACKEND war_getJSBackend();
 void war_setJSBackend(JS_BACKEND backend);
 bool war_getAutoAdjustDisplayScale();
 void war_setAutoAdjustDisplayScale(bool autoAdjustDisplayScale);
+int war_getAutoLagKickSeconds();
+void war_setAutoLagKickSeconds(int seconds);
+bool war_getDisableReplayRecording();
+void war_setDisableReplayRecording(bool disable);
 
 /**
  * Enable or disable sound initialization

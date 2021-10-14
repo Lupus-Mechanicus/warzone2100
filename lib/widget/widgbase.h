@@ -30,6 +30,7 @@
 #include <vector>
 #include <functional>
 #include <string>
+#include <optional-lite/optional.hpp>
 #include "lib/framework/geometry.h"
 #include "lib/framework/wzstring.h"
 
@@ -57,12 +58,12 @@ typedef void (*WIDGET_CALLBACK)(WIDGET *psWidget, W_CONTEXT *psContext);
 typedef void (*WIDGET_AUDIOCALLBACK)(int AudioID);
 
 /* The optional "calc layout" callback function, to support runtime layout recalculation */
-typedef std::function<void (WIDGET *psWidget, unsigned int oldScreenWidth, unsigned int oldScreenHeight, unsigned int newScreenWidth, unsigned int newScreenHeight)> WIDGET_CALCLAYOUT_FUNC;
+typedef std::function<void (WIDGET *psWidget)> WIDGET_CALCLAYOUT_FUNC;
 
 // To avoid typing, use the following define to construct a lambda for WIDGET_CALCLAYOUT_FUNC
 // psWidget is the widget
 // The { } are still required (for clarity).
-#define LAMBDA_CALCLAYOUT_SIMPLE(x) [](WIDGET *psWidget, unsigned int, unsigned int, unsigned int, unsigned int) x
+#define LAMBDA_CALCLAYOUT_SIMPLE(x) [](WIDGET *psWidget) x
 
 /* The optional "onDelete" callback function */
 typedef std::function<void (WIDGET *psWidget)> WIDGET_ONDELETE_FUNC;
@@ -149,6 +150,10 @@ public:
 
 	virtual void focusLost() {}
 	virtual void clicked(W_CONTEXT *, WIDGET_KEY = WKEY_PRIMARY) {}
+	virtual std::string getTip()
+	{
+		return "";
+	}
 
 protected:
 	virtual void released(W_CONTEXT *, WIDGET_KEY = WKEY_PRIMARY) {}
@@ -208,6 +213,10 @@ public:
 		}
 		childWidgets = {};
 	}
+	WzRect screenGeometry() const
+	{
+		return WzRect(screenPosX(), screenPosY(), width(), height());
+	}
 	WzRect const &geometry() const
 	{
 		return dim;
@@ -220,12 +229,20 @@ public:
 	{
 		return dim.y();
 	}
+	virtual int parentRelativeXOffset(int coord) const
+	{
+		return x() + coord;
+	}
+	virtual int parentRelativeYOffset(int coord) const
+	{
+		return y() + coord;
+	}
 	int screenPosX() const
 	{
 		int screenX = x();
 		for (auto psParent = parent(); psParent != nullptr; psParent = psParent->parent())
 		{
-			screenX += psParent->x();
+			screenX = psParent->parentRelativeXOffset(screenX);
 		}
 		return screenX;
 	}
@@ -234,7 +251,7 @@ public:
 		int screenY = y();
 		for (auto psParent = parent(); psParent != nullptr; psParent = psParent->parent())
 		{
-			screenY += psParent->y();
+			screenY = psParent->parentRelativeYOffset(screenY);
 		}
 		return screenY;
 	}
@@ -289,7 +306,16 @@ public:
 	bool isMouseOverWidget() const;
 
 	void setTransparentToClicks(bool hasClickTransparency);
+	void setTransparentToMouse(bool hasMouseTransparency);
 	bool transparentToClicks() const;
+
+	virtual int32_t idealWidth();
+	virtual int32_t idealHeight();
+
+	virtual nonstd::optional<std::vector<uint32_t>> getScrollSnapOffsets()
+	{
+		return nonstd::nullopt;
+	}
 
 	UDWORD                  id;                     ///< The user set ID number for the widget. This is returned when e.g. a button is pressed.
 	WIDGET_TYPE             type;                   ///< The widget type
@@ -300,6 +326,10 @@ public:
 	UDWORD                  UserData;               ///< User data (if any)
 	std::weak_ptr<W_SCREEN> screenPointer;          ///< Pointer to screen the widget is on (if attached).
 
+protected:
+	nonstd::optional<int32_t> defaultIdealWidth;
+	nonstd::optional<int32_t> defaultIdealHeight;
+
 private:
 	WIDGET_CALCLAYOUT_FUNC  calcLayout;				///< Optional calc layout callback
 	WIDGET_ONDELETE_FUNC	onDelete;				///< Optional callback called when the Widget is about to be deleted
@@ -307,7 +337,7 @@ private:
 	void setScreenPointer(const std::shared_ptr<W_SCREEN> &screen); ///< Set screen pointer for us and all children.
 public:
 	virtual bool processClickRecursive(W_CONTEXT *psContext, WIDGET_KEY key, bool wasPressed);
-	void runRecursive(W_CONTEXT *psContext);
+	virtual void runRecursive(W_CONTEXT *psContext);
 	void processCallbacksRecursive(W_CONTEXT *psContext);
 	virtual void displayRecursive(WidgetGraphicsContext const &context);  ///< Display this widget, and all visible children.
 	void displayRecursive()
@@ -322,6 +352,7 @@ private:
 
 	WzRect                  dim;
 	bool					isTransparentToClicks = false;
+	bool					isTransparentToMouse = false;
 
 	WIDGET(WIDGET const &) = delete;
 	WIDGET &operator =(WIDGET const &) = delete;
@@ -345,14 +376,14 @@ struct W_SCREEN: public std::enable_shared_from_this<W_SCREEN>
 protected:
 	W_SCREEN(): TipFontID(font_regular) {}
 	virtual ~W_SCREEN();
-	void initialize();
+	void initialize(const std::shared_ptr<W_FORM>& customRootForm);
 
 public:
-	static std::shared_ptr<W_SCREEN> make()
+	static std::shared_ptr<W_SCREEN> make(std::shared_ptr<W_FORM> customRootForm = nullptr)
 	{
 		class make_shared_enabler: public W_SCREEN {};
 		auto screen = std::make_shared<make_shared_enabler>();
-		screen->initialize();
+		screen->initialize(customRootForm);
 		return screen;
 	}
 

@@ -41,6 +41,7 @@
 #include "version.h"
 #include "warzoneconfig.h"
 #include "wrappers.h"
+#include "multilobbycommands.h"
 
 #include <cwchar>
 
@@ -82,6 +83,10 @@ static std::string wz_saveandquit;
 static std::string wz_test;
 static std::string wz_autoratingUrl;
 static bool wz_cli_headless = false;
+static bool wz_streamer_spectator_mode = false;
+static bool wz_lobby_slashcommands = false;
+static WZ_Command_Interface wz_cmd_interface = WZ_Command_Interface::None;
+static int wz_min_autostart_players = -1;
 
 #if defined(WZ_OS_WIN)
 
@@ -92,8 +97,12 @@ static bool wz_cli_headless = false;
 #else
 	// Earlier SDKs don't have the concept of families - provide simple implementation
 	// that treats everything as "desktop"
-	#define WINAPI_PARTITION_DESKTOP			0x00000001
-	#define WINAPI_FAMILY_PARTITION(Partition)	((WINAPI_PARTITION_DESKTOP & Partition) == Partition)
+	#if !defined(WINAPI_PARTITION_DESKTOP)
+		#define WINAPI_PARTITION_DESKTOP			0x00000001
+	#endif
+	#if !defined(WINAPI_FAMILY_PARTITION)
+		#define WINAPI_FAMILY_PARTITION(Partition)	((WINAPI_PARTITION_DESKTOP & Partition) == Partition)
+	#endif
 #endif
 
 #include <fcntl.h>
@@ -159,7 +168,10 @@ static void poptPrintHelp(poptContext ctx, FILE *output)
 		if (ctx->table[i].argument)
 		{
 			sstrcat(txt, "=");
-			sstrcat(txt, ctx->table[i].argDescrip);
+			if (ctx->table[i].argDescrip)
+			{
+				sstrcat(txt, ctx->table[i].argDescrip);
+			}
 		}
 
 		// calculate number of terminal columns required to print
@@ -308,6 +320,7 @@ typedef enum
 	CLI_SOUND,
 	CLI_NOSOUND,
 	CLI_CONNECTTOIP,
+	CLI_CONNECTTOIP_SPECTATE,
 	CLI_HOSTLAUNCH,
 	CLI_NOASSERT,
 	CLI_CRASH,
@@ -327,6 +340,13 @@ typedef enum
 	CLI_WIN_ENABLE_CONSOLE,
 #endif
 	CLI_GAMEPORT,
+	CLI_WZ_CRASH_RPT,
+	CLI_STREAMER_SPECTATOR,
+	CLI_LOBBY_SLASHCOMMANDS,
+	CLI_ADD_LOBBY_ADMINHASH,
+	CLI_ADD_LOBBY_ADMINPUBLICKEY,
+	CLI_COMMAND_INTERFACE,
+	CLI_STARTPLAYERS,
 } CLI_OPTIONS;
 
 static const struct poptOption *getOptionsTable()
@@ -356,6 +376,7 @@ static const struct poptOption *getOptionsTable()
 		{ "sound", POPT_ARG_NONE, CLI_SOUND,      N_("Enable sound"),                      nullptr },
 		{ "nosound", POPT_ARG_NONE, CLI_NOSOUND,    N_("Disable sound"),                     nullptr },
 		{ "join", POPT_ARG_STRING, CLI_CONNECTTOIP, N_("Connect directly to IP/hostname"),  N_("host") },
+		{ "spectate", POPT_ARG_STRING, CLI_CONNECTTOIP_SPECTATE, N_("Connect directly to IP/hostname as a spectator"),  N_("host") },
 		{ "host", POPT_ARG_NONE, CLI_HOSTLAUNCH, N_("Go directly to host screen"),        nullptr },
 		{ "texturecompression", POPT_ARG_NONE, CLI_TEXTURECOMPRESSION, N_("Enable texture compression"), nullptr },
 		{ "notexturecompression", POPT_ARG_NONE, CLI_NOTEXTURECOMPRESSION, N_("Disable texture compression"), nullptr },
@@ -386,6 +407,13 @@ static const struct poptOption *getOptionsTable()
 		{ "enableconsole", POPT_ARG_NONE, CLI_WIN_ENABLE_CONSOLE,   N_("Attach or create a console window and display console output (Windows only)"), nullptr },
 #endif
 		{ "gameport", POPT_ARG_STRING, CLI_GAMEPORT,   N_("Set game server port"), N_("port") },
+		{ "wz-crash-rpt", POPT_ARG_NONE, CLI_WZ_CRASH_RPT, nullptr, nullptr },
+		{ "spectator-min-ui", POPT_ARG_NONE, CLI_STREAMER_SPECTATOR, nullptr, nullptr},
+		{ "enablelobbyslashcmd", POPT_ARG_NONE, CLI_LOBBY_SLASHCOMMANDS, N_("Enable lobby slash commands (for connecting clients)"), nullptr},
+		{ "addlobbyadminhash", POPT_ARG_STRING, CLI_ADD_LOBBY_ADMINHASH, N_("Add a lobby admin identity hash (for slash commands)"), _("hash string")},
+		{ "addlobbyadminpublickey", POPT_ARG_STRING, CLI_ADD_LOBBY_ADMINPUBLICKEY, N_("Add a lobby admin public key (for slash commands)"), N_("b64-pub-key")},
+		{ "enablecmdinterface", POPT_ARG_STRING, CLI_COMMAND_INTERFACE, N_("Enable command interface"), N_("(stdin)")},
+		{ "startplayers", POPT_ARG_STRING, CLI_STARTPLAYERS, N_("Minimum required players to auto-start game"), N_("startplayers")},
 		// Terminating entry
 		{ nullptr, 0, 0,              nullptr,                                    nullptr },
 	};
@@ -512,6 +540,9 @@ bool ParseCommandLineEarly(int argc, const char * const *argv)
 			SetStdOutToConsole_Win();
 			break;
 #endif
+		case CLI_WZ_CRASH_RPT:
+			// this is currently a no-op because it must be parsed even earlier than ParseCommandLineEarly
+			break;
 		default:
 			break;
 		};
@@ -549,6 +580,7 @@ bool ParseCommandLine(int argc, const char * const *argv)
 #if defined(WZ_OS_WIN)
 		case CLI_WIN_ENABLE_CONSOLE:
 #endif
+		case CLI_WZ_CRASH_RPT:
 			// These options are parsed in ParseCommandLineEarly() already, so ignore them
 			break;
 
@@ -578,6 +610,7 @@ bool ParseCommandLine(int argc, const char * const *argv)
 			war_setWindowMode(WINDOW_MODE::fullscreen);
 			break;
 		case CLI_CONNECTTOIP:
+		case CLI_CONNECTTOIP_SPECTATE:
 			//get the ip we want to connect with, and go directly to join screen.
 			token = poptGetOptArg(poptCon);
 			if (token == nullptr)
@@ -585,6 +618,8 @@ bool ParseCommandLine(int argc, const char * const *argv)
 				qFatal("No IP/hostname given");
 			}
 			sstrcpy(iptoconnect, token);
+			// also set spectate flag
+			cliConnectToIpAsSpectator = (option == CLI_CONNECTTOIP_SPECTATE);
 			break;
 		case CLI_HOSTLAUNCH:
 			// go directly to host screen, bypass all others.
@@ -849,6 +884,64 @@ bool ParseCommandLine(int argc, const char * const *argv)
 			netGameserverPortOverride = true;
 			debug(LOG_INFO, "Games will be hosted on port [%d]", NETgetGameserverPort());
 			break;
+
+		case CLI_STREAMER_SPECTATOR:
+			wz_streamer_spectator_mode = true;
+			break;
+
+		case CLI_LOBBY_SLASHCOMMANDS:
+			wz_lobby_slashcommands = true;
+			break;
+
+		case CLI_ADD_LOBBY_ADMINHASH:
+			token = poptGetOptArg(poptCon);
+			if (token == nullptr || strlen(token) == 0)
+			{
+				qFatal("Bad admin hash");
+			}
+			addLobbyAdminIdentityHash(token);
+			break;
+
+		case CLI_ADD_LOBBY_ADMINPUBLICKEY:
+			token = poptGetOptArg(poptCon);
+			if (token == nullptr || strlen(token) == 0)
+			{
+				qFatal("Bad admin public key");
+			}
+			addLobbyAdminPublicKey(token);
+			break;
+
+		case CLI_COMMAND_INTERFACE:
+			token = poptGetOptArg(poptCon);
+			if (token == nullptr || strlen(token) == 0)
+			{
+				// use default, which is currently "stdin"
+				token = "stdin";
+			}
+			if (strcmp(token, "stdin") == 0)
+			{
+				// enable stdin
+				wz_cmd_interface = WZ_Command_Interface::StdIn_Interface;
+			}
+			else
+			{
+				qFatal("Unsupported / invalid enablecmdinterface value");
+			}
+			break;
+		case CLI_STARTPLAYERS:
+			token = poptGetOptArg(poptCon);
+			if (token == nullptr)
+			{
+				qFatal("Bad start players count");
+			}
+			wz_min_autostart_players = atoi(token);
+			if (wz_min_autostart_players < 0)
+			{
+				qFatal("Invalid start players count");
+			}
+			debug(LOG_INFO, "Games will automatically start with [%d] players (when ready)", wz_min_autostart_players);
+			break;
+
 		};
 	}
 
@@ -878,4 +971,32 @@ std::string autoratingUrl(std::string const &hash) {
 		url.replace(h, 6, hash);
 	}
 	return url;
+}
+
+void setAutoratingUrl(std::string url) {
+	wz_autoratingUrl = url;
+}
+
+std::string getAutoratingUrl() {
+	return wz_autoratingUrl;
+}
+
+bool streamer_spectator_mode()
+{
+	return wz_streamer_spectator_mode;
+}
+
+bool lobby_slashcommands_enabled()
+{
+	return wz_lobby_slashcommands;
+}
+
+WZ_Command_Interface wz_command_interface()
+{
+	return wz_cmd_interface;
+}
+
+int min_autostart_player_count()
+{
+	return wz_min_autostart_players;
 }

@@ -68,8 +68,8 @@ if(ENABLE_NLS)
 	find_package (Intl REQUIRED)
 endif()
 
-file(GLOB HEADERS "*.h" "3rdparty/*.h" "titleui/*.h")
-file(GLOB SRC "*.cpp" "3rdparty/*.cpp" "titleui/*.cpp" "hci/*.cpp")
+file(GLOB HEADERS "*.h" "3rdparty/*.h" "titleui/*.h" "hci/*.h" "input/*.h")
+file(GLOB SRC "*.cpp" "3rdparty/*.cpp" "titleui/*.cpp" "hci/*.cpp" "input/*.cpp")
 
 set(_additionalSourceFiles)
 if(CMAKE_SYSTEM_NAME MATCHES "Windows")
@@ -77,9 +77,8 @@ if(CMAKE_SYSTEM_NAME MATCHES "Windows")
 endif()
 
 add_executable(warzone2100 ${HEADERS} ${SRC} "${wz2100_autorevision_h_file}" ${_additionalSourceFiles})
-if(WZ_TARGET_ADDITIONAL_PROPERTIES)
-	SET_TARGET_PROPERTIES(warzone2100 PROPERTIES ${WZ_TARGET_ADDITIONAL_PROPERTIES})
-endif()
+include(WZTargetConfiguration)
+WZ_TARGET_CONFIGURATION(warzone2100)
 target_compile_definitions(warzone2100 PRIVATE "YY_NO_UNISTD_H")
 target_compile_definitions(warzone2100 PRIVATE "JSON_USE_IMPLICIT_CONVERSIONS=0")
 SET_TARGET_PROPERTIES(warzone2100 PROPERTIES RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_CURRENT_BINARY_DIR}")
@@ -102,8 +101,9 @@ if(MSVC)
 	target_compile_options(warzone2100 PRIVATE "/wd4267")
 endif()
 
-target_link_libraries(warzone2100 exception-handler gamelib ivis-opengl netplay sdl-backend framework sequence sound widget)
+target_link_libraries(warzone2100 exception-handler gamelib wzmaplib ivis-opengl netplay sdl-backend framework sequence sound widget)
 target_link_libraries(warzone2100 launchinfo EmbeddedJSONSignature)
+target_link_libraries(warzone2100 fmt::fmt)
 if(ENABLE_NLS)
 	target_link_libraries(warzone2100 ${Intl_LIBRARIES})
 endif()
@@ -526,6 +526,36 @@ if(CMAKE_SYSTEM_NAME MATCHES "Windows")
 	ADD_TARGET_LINK_FLAGS_IF_SUPPORTED(TARGET warzone2100 LINK_FLAGS "-Wl,--nxcompat" CACHED_RESULT_NAME LINK_FLAG_WL_NXCOMPAT_SUPPORTED)
 	ADD_TARGET_LINK_FLAGS_IF_SUPPORTED(TARGET warzone2100 LINK_FLAGS "/DYNAMICBASE" CACHED_RESULT_NAME LINK_FLAG_SLASH_DYNAMICBASE_SUPPORTED)
 	ADD_TARGET_LINK_FLAGS_IF_SUPPORTED(TARGET warzone2100 LINK_FLAGS "-Wl,--dynamicbase" CACHED_RESULT_NAME LINK_FLAG_WL_DYNAMICBASE_SUPPORTED)
+	if(CMAKE_SIZEOF_VOID_P EQUAL 8 OR CMAKE_SIZEOF_VOID_P GREATER 8)
+		ADD_TARGET_LINK_FLAGS_IF_SUPPORTED(TARGET warzone2100 LINK_FLAGS "-Wl,--high-entropy-va" CACHED_RESULT_NAME LINK_FLAG_WL_HIGHENTROPYVA_SUPPORTED)
+	endif()
+
+	if(MINGW)
+		# Fix: Allow DATA imports from a DLL with a non-zero offset
+		ADD_TARGET_LINK_FLAGS_IF_SUPPORTED(TARGET warzone2100 LINK_FLAGS "-Wl,--enable-runtime-pseudo-reloc" CACHED_RESULT_NAME LINK_FLAG_WL_RUNTIME_PSEUDO_RELOC_SUPPORTED)
+		# Fix: Disable automatic image base calculation (not needed because of ASLR)
+		# See: https://lists.ffmpeg.org/pipermail/ffmpeg-cvslog/2015-September/094018.html
+		# See: https://sourceware.org/bugzilla/show_bug.cgi?id=19011
+		ADD_TARGET_LINK_FLAGS_IF_SUPPORTED(TARGET warzone2100 LINK_FLAGS "-Wl,--disable-auto-image-base" CACHED_RESULT_NAME LINK_FLAG_WL_DISABLE_AUTO_IMAGE_BASE_SUPPORTED)
+		# Workaround a weird bug with relocation information by enabling --pic-executable
+		# See: https://sourceforge.net/p/mingw-w64/mailman/message/31035280/
+		ADD_TARGET_LINK_FLAGS_IF_SUPPORTED(TARGET warzone2100 LINK_FLAGS "-Wl,--pic-executable" CACHED_RESULT_NAME LINK_FLAG_WL_PICEXECUTABLE_SUPPORTED)
+		# Fix: MinGW's LD forgets the entry point when used with pic-executable.
+		# See: https://git.videolan.org/?p=ffmpeg.git;a=commitdiff;h=91b668a
+		if(CMAKE_SIZEOF_VOID_P EQUAL 8 OR CMAKE_SIZEOF_VOID_P GREATER 8)
+			set_property(TARGET warzone2100 APPEND_STRING PROPERTY "LINK_FLAGS" " -Wl,-e,mainCRTStartup")
+		else()
+			set_property(TARGET warzone2100 APPEND_STRING PROPERTY "LINK_FLAGS" " -Wl,-e,_mainCRTStartup")
+		endif()
+		# Fix: Opt-in to extra entropy when using High-Entropy ASLR by setting the image base > 4GB
+		# See: https://git.videolan.org/?p=ffmpeg.git;a=commitdiff;h=a58c22d
+		if(CMAKE_SIZEOF_VOID_P EQUAL 8 OR CMAKE_SIZEOF_VOID_P GREATER 8)
+			# Note: The image base should be:
+			#	0x140000000 - for exes
+			#	0x180000000 - for DLLs
+			set_property(TARGET warzone2100 APPEND_STRING PROPERTY "LINK_FLAGS" " -Wl,--image-base,0x140000000")
+		endif()
+	endif()
 endif()
 
 if(NOT CMAKE_SYSTEM_NAME MATCHES "Darwin")
@@ -545,31 +575,52 @@ endif()
 #######################
 # Supporting google-breakpad tools for processing minidumps
 
-if(CMAKE_SYSTEM_NAME MATCHES "Windows" AND CMAKE_HOST_SYSTEM_NAME MATCHES "Windows")
-	# Find dump_syms.exe
-	find_program(DUMP_SYMS dump_syms HINTS "${CMAKE_BINARY_DIR}" "${PROJECT_SOURCE_DIR}")
-	if(DUMP_SYMS)
-		# Generate the .sym file from the .pdb
-		get_target_property(_mainexename warzone2100 OUTPUT_NAME)
-		add_custom_command(TARGET warzone2100 POST_BUILD
-			COMMAND ${DUMP_SYMS} "${CMAKE_CURRENT_BINARY_DIR}/${_mainexename}.pdb" > "${CMAKE_CURRENT_BINARY_DIR}/${_mainexename}.sym"
-			DEPENDS "${DUMP_SYMS}" "${CMAKE_CURRENT_BINARY_DIR}/${_mainexename}.pdb"
-		)
+if(CMAKE_SYSTEM_NAME MATCHES "Windows" AND CMAKE_HOST_SYSTEM_NAME MATCHES "Windows" AND WZ_WIN_HAS_PDB)
+	get_target_property(_mainexename warzone2100 OUTPUT_NAME)
+	if(_mainexename)
+		# Find dump_syms.exe
+		find_program(DUMP_SYMS dump_syms HINTS "${CMAKE_BINARY_DIR}" "${PROJECT_SOURCE_DIR}")
+		if(DUMP_SYMS)
+			# Generate a Breakpad .sym file
+			install(CODE "
+				set(DUMP_SYMS \"${DUMP_SYMS}\")
+				execute_process(COMMAND \${CMAKE_COMMAND} -E echo \"++install CODE: Running dump_syms: \${DUMP_SYMS}\")
 
-		# Install the .sym file (to ensure it's always with the .exe)
-		install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${_mainexename}.sym" COMPONENT Core DESTINATION "${WZ_APP_INSTALL_DEST}")
+				# Generate the .sym file from the .pdb
+				set(_outputDirectory \"\${CMAKE_INSTALL_PREFIX}/${WZ_APP_INSTALL_DEST}\")
+				set(_outputFilepath \"\${_outputDirectory}/${_mainexename}.sym\")
+				execute_process(COMMAND \${CMAKE_COMMAND} -E make_directory \"\${_outputDirectory}\")
+				execute_process(COMMAND \"\${DUMP_SYMS}\" \"${CMAKE_CURRENT_BINARY_DIR}/${_mainexename}.pdb\"
+								OUTPUT_FILE \"\${_outputFilepath}\"
+								RESULT_VARIABLE _dumpsyms_result)
+				if(_dumpsyms_result EQUAL 0 AND EXISTS \"\${_outputFilepath}\")
+					execute_process(COMMAND \${CMAKE_COMMAND} -E echo \"++install CODE: Generated a Breakpad .sym file from .pdb\")
+				else()
+					execute_process(COMMAND \${CMAKE_COMMAND} -E echo \"++install CODE: WARNING: Failed to generate a Breakpad .sym file from .pdb (exit code: \${_dumpsyms_result})\")
+				endif()
+			" COMPONENT DebugSymbols)
+		else()
+			message( WARNING "Could not find dump_syms.exe. Unable to generate a Breakpad .sym file from .pdb" )
+		endif()
 	else()
-		message( WARNING "Could not find dump_syms.exe. Unable to generate a Breakpad .sym file from .pdb" )
+		message( WARNING "Unable to get OUTPUT_NAME from warzone2100 target" )
 	endif()
+endif()
+
+# Support crashpad sentry backend - requires installation of helper binary to handle crashes
+if(TARGET crashpad_handler)
+	if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+		message(FATAL_ERROR "crashpad_handler is not currently supported for macOS builds")
+	endif()
+	install(TARGETS crashpad_handler COMPONENT Core DESTINATION "${WZ_APP_INSTALL_DEST}")
 endif()
 
 #######################
 # Install
 install(TARGETS warzone2100 COMPONENT Core DESTINATION "${WZ_APP_INSTALL_DEST}")
 
-if(WZ_PORTABLE)
-	install(FILES "${CMAKE_SOURCE_DIR}/pkg/portable.in" COMPONENT Core DESTINATION "${WZ_APP_INSTALL_DEST}" RENAME ".portable")
-endif()
+# For Portable packages only, copy the ".portable" file that triggers portable mode (Windows-only)
+install(FILES "${CMAKE_SOURCE_DIR}/pkg/portable.in" COMPONENT PortableConfig DESTINATION "${WZ_APP_INSTALL_DEST}" RENAME ".portable")
 
 #####################
 # Installing Required Runtime Dependencies
@@ -596,11 +647,25 @@ if(CMAKE_SYSTEM_NAME MATCHES "Windows")
 					list(APPEND _wz_fixup_bundle_ignored_filenames "${lib_name}")
 					list(APPEND _wz_fixup_bundle_nocopy_libraries "${lib_name}")
 				endforeach()
-				if(_wz_fixup_bundle_ignored_filenames)
-					message( STATUS "fixup_bundle: IGNORE_ITEM ${_wz_fixup_bundle_ignored_filenames}" )
-				else()
+				if(NOT _wz_fixup_bundle_ignored_filenames)
 					message( WARNING "InstallRequiredSystemLibraries returned no libraries? (CMake: ${CMAKE_VERSION}; MSVC: ${MSVC_VERSION})" )
 				endif()
+			endif()
+			# - Always ignore dbghelp.dll
+			list(APPEND _wz_fixup_bundle_ignored_filenames "dbghelp.dll")
+			list(APPEND _wz_fixup_bundle_nocopy_libraries "dbghelp.dll")
+			if(MINGW)
+				# Find path to C++ stdlib, and preserve for later fixup_bundle use
+				find_file(WZ_STDCXXDLL NAMES "libc++.dll" "libstdc++-6.dll")
+				if(WZ_STDCXXDLL)
+					message(STATUS "Detected C++ stdlib DLL: ${WZ_STDCXXDLL}")
+					get_filename_component(WZ_STDCXXDLL_PATH "${WZ_STDCXXDLL}" DIRECTORY)
+				else()
+					message(WARNING "Did not find a path to the C++ stdlib DLL. Packaged binary may not run on other systems.")
+				endif()
+			endif()
+			if(_wz_fixup_bundle_ignored_filenames)
+				message( STATUS "fixup_bundle: IGNORE_ITEM ${_wz_fixup_bundle_ignored_filenames}" )
 			endif()
 			install(CODE "
 				execute_process(COMMAND \${CMAKE_COMMAND} -E echo \"++install CODE: CMAKE_INSTALL_CONFIG_NAME: \${CMAKE_INSTALL_CONFIG_NAME}\")
@@ -617,6 +682,13 @@ if(CMAKE_SYSTEM_NAME MATCHES "Windows")
 					set(dll_source_dirs \"\${wz_vcpkg_installed_prefix_path}/debug/bin/\")
 				else()
 					set(dll_source_dirs \"\${wz_vcpkg_installed_prefix_path}/bin/\")
+				endif()
+				# MINGW may require distributing the C++ stdlib DLLs
+				set(_WZ_STDCXXDLL_PATH \"${WZ_STDCXXDLL_PATH}\")
+				if(_WZ_STDCXXDLL_PATH AND EXISTS \"\${_WZ_STDCXXDLL_PATH}\")
+					execute_process(COMMAND \${CMAKE_COMMAND} -E echo \"++install CODE: C++ stdlib path: \${_WZ_STDCXXDLL_PATH}\")
+					# Add second, to ensure that vcpkg-built dependencies are always selected first
+					list(APPEND dll_source_dirs \"\${_WZ_STDCXXDLL_PATH}\")
 				endif()
 				execute_process(COMMAND \${CMAKE_COMMAND} -E echo \"++install CODE: dll_source_dirs: \${dll_source_dirs}\")
 				set(_ignored_filenames \"${_wz_fixup_bundle_ignored_filenames}\")
@@ -638,6 +710,43 @@ if(CMAKE_SYSTEM_NAME MATCHES "Windows")
 						file(REMOVE \"\${_lib_fullpath}\")
 					endif()
 				endforeach()
+				# Sanity-check to ensure that the C++ stdlib, for mingw, actually came from mingw (i.e. is the expected version)
+				set(_WZ_STDCXXDLL \"${WZ_STDCXXDLL}\")
+				if(_WZ_STDCXXDLL AND EXISTS \"\${_WZ_STDCXXDLL}\")
+					file(SHA512 \"\${_WZ_STDCXXDLL}\" _std_cxx_expected_hash)
+					get_filename_component(_WZ_STDCXXDLL_FILENAME \"\${_WZ_STDCXXDLL}\" NAME)
+					set(_copied_cxx_stdlib \"\${CMAKE_INSTALL_PREFIX}/${WZ_APP_INSTALL_DEST}/\${_WZ_STDCXXDLL_FILENAME}\")
+					file(SHA512 \"\${_copied_cxx_stdlib}\" _std_cxx_actual_hash)
+					if(\"\${_std_cxx_expected_hash}\" STREQUAL \"\${_std_cxx_actual_hash}\")
+						execute_process(COMMAND \${CMAKE_COMMAND} -E echo \"++Verified expected C++ stdlib: \${_WZ_STDCXXDLL_FILENAME}\")
+					else()
+						message(FATAL_ERROR \"Copied C++ stdlib does not match expected C++ stdlib\")
+					endif()
+					if(NOT CMAKE_VERSION VERSION_LESS 3.16) # file(GET_RUNTIME_DEPENDENCIES ...) requires CMake 3.16+
+						file(GET_RUNTIME_DEPENDENCIES
+							RESOLVED_DEPENDENCIES_VAR _WZ_STDCXXDLL_DEPENDENCIES
+							UNRESOLVED_DEPENDENCIES_VAR _WZ_STDCXXDLL_UNRESOLVED_DEPENDENCIES
+							LIBRARIES \"\${_WZ_STDCXXDLL}\"
+							DIRECTORIES \"\${_WZ_STDCXXDLL_PATH}\"
+							PRE_EXCLUDE_REGEXES \"^api-ms-win-*.dll$\" \"^ucrtbase.dll$\" \"^kernelbase.dll$\" \"^kernel32.dll$\"
+							POST_EXCLUDE_REGEXES \"[\\\\/][Ww][Ii][Nn][Dd][Oo][Ww][Ss][\\\\/][Ss][Yy][Ss][Tt][Ee][Mm]32[\\\\/].*\.dll$\"
+						)
+						foreach(_stdcxx_dependency IN LISTS _WZ_STDCXXDLL_DEPENDENCIES)
+							get_filename_component(_stdcxx_dependency_filename \"\${_stdcxx_dependency}\" NAME)
+							if(EXISTS \"\${_WZ_STDCXXDLL_PATH}/\${_stdcxx_dependency_filename}\")
+								file(SHA512 \"\${_WZ_STDCXXDLL_PATH}/\${_stdcxx_dependency_filename}\" _stdcxx_dependency_expected_hash)
+								if(EXISTS \"\${_WZ_STDCXXDLL_PATH}/\${_stdcxx_dependency_filename}\")
+									file(SHA512 \"\${CMAKE_INSTALL_PREFIX}/${WZ_APP_INSTALL_DEST}/\${_stdcxx_dependency_filename}\" _stdcxx_dependency_actual_hash)
+									if(\"\${_stdcxx_dependency_expected_hash}\" STREQUAL \"\${_stdcxx_dependency_actual_hash}\")
+										execute_process(COMMAND \${CMAKE_COMMAND} -E echo \"++Verified expected C++ stdlib dependency: \${_stdcxx_dependency_filename}\")
+									else()
+										message(FATAL_ERROR \"Copied C++ stdlib dependency does not match expected: \${_stdcxx_dependency_filename}\")
+									endif()
+								endif()
+							endif()
+						endforeach()
+					endif()
+				endif()
 			" COMPONENT Core)
 
 			# Install LibANGLE DLLs (if available, from vcpkg)
@@ -681,9 +790,9 @@ if(CMAKE_SYSTEM_NAME MATCHES "Windows")
 			message( STATUS "CMAKE_CROSSCOMPILING is defined - skipping BundleUtilities" )
 		endif()
 
-		if("${CMAKE_CXX_COMPILER_ID}" MATCHES "MSVC")
+		if(WZ_WIN_HAS_PDB)
 			# Must install the PDB file or crash dumps won't be as useful
-			install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${_mainexename}.pdb" COMPONENT Core DESTINATION "${WZ_APP_INSTALL_DEST}")
+			install(FILES "${CMAKE_CURRENT_BINARY_DIR}/${_mainexename}.pdb" COMPONENT DebugSymbols DESTINATION "${WZ_APP_INSTALL_DEST}")
 		endif()
 	else()
 		message( WARNING "Unable to get OUTPUT_NAME from warzone2100 target" )

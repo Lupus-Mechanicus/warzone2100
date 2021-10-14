@@ -5,7 +5,7 @@ param([string]$VCPKG_BUILD_TYPE = "")
 ############################
 
 # To ensure reproducible builds, pin to a specific vcpkg commit
-$VCPKG_COMMIT_SHA = "030cfaa24de9ea1bbf0a4d9c615ce7312ba77af1";
+$VCPKG_COMMIT_SHA = "5bb0c7fc45da94844dfac35c8e441758e03e7666";
 
 # WZ Windows features (for vcpkg install)
 $VCPKG_INSTALL_FEATURES = @()
@@ -57,6 +57,10 @@ If ( -not (Test-Path (Join-Path "$($ScriptRoot)" "launch.vs.json") ) )
 	Copy-Item (Join-Path "$($ScriptRoot)" "win32\launch.vs.json") -Destination "$($ScriptRoot)"
 }
 
+# Create build-dir vcpkg overlay folders
+$tripletOverlayFolder = (Join-Path (pwd) vcpkg_overlay_triplets)
+if (!(Test-Path -path $tripletOverlayFolder)) {New-Item $tripletOverlayFolder -Type Directory}
+
 # Download & build vcpkg (+ dependencies)
 If ( -not (Test-Path (Join-Path (pwd) vcpkg\.git) -PathType Container) )
 {
@@ -77,34 +81,53 @@ pushd vcpkg;
 git reset --hard $VCPKG_COMMIT_SHA;
 .\bootstrap-vcpkg.bat;
 
-If (-not ([string]::IsNullOrEmpty($VCPKG_BUILD_TYPE)))
+$triplet = "x86-windows"; # vcpkg default
+If (-not ([string]::IsNullOrEmpty($env:VCPKG_DEFAULT_TRIPLET)))
 {
-	# Add VCPKG_BUILD_TYPE to the specified triplet
-	$triplet = "x86-windows"; # vcpkg default
-	If (-not ([string]::IsNullOrEmpty($env:VCPKG_DEFAULT_TRIPLET)))
-	{
-		$triplet = "$env:VCPKG_DEFAULT_TRIPLET";
-	}
+	$triplet = "$env:VCPKG_DEFAULT_TRIPLET";
+}
+
+If (($triplet.Contains("mingw")) -or (-not ([string]::IsNullOrEmpty($VCPKG_BUILD_TYPE))))
+{
+	# Need to create a copy of the triplet and modify it
 	$tripletFile = "triplets\$($triplet).cmake";
-	$setString = Select-String -Quiet -Pattern "set(VCPKG_BUILD_TYPE `"$VCPKG_BUILD_TYPE`")" -SimpleMatch -Path $tripletFile;
-	if (-not $setString)
+	If (!(Test-Path $tripletFile -PathType Leaf))
 	{
-		Add-Content -Path $tripletFile -Value "`r`nset(VCPKG_BUILD_TYPE `"$VCPKG_BUILD_TYPE`")";
+		$tripletFile = "triplets\community\$($triplet).cmake";
+		If (!(Test-Path $tripletFile -PathType Leaf))
+		{
+			Write-Error "Unable to find VCPKG_DEFAULT_TRIPLET: $env:VCPKG_DEFAULT_TRIPLET"
+		}
 	}
+	Copy-Item "$tripletFile" -Destination "$tripletOverlayFolder"
+	$tripletFileName = Split-Path -Leaf "$tripletFile"
+	$overlayTripletFile = "$tripletOverlayFolder\$tripletFileName"
+	If ($triplet.Contains("mingw"))
+	{
+		# A fix for libtool issues with mingw-clang
+		Add-Content -Path $overlayTripletFile -Value "`r`nlist(APPEND VCPKG_MAKE_CONFIGURE_OPTIONS `"lt_cv_deplibs_check_method=pass_all`")";
+	}
+	If (-not ([string]::IsNullOrEmpty($VCPKG_BUILD_TYPE)))
+	{
+		Add-Content -Path $overlayTripletFile -Value "`r`nset(VCPKG_BUILD_TYPE `"$VCPKG_BUILD_TYPE`")";
+	}
+	# Setup environment variable so vcpkg uses the overlay triplets folder
+	$env:VCPKG_OVERLAY_TRIPLETS = "$tripletOverlayFolder"
 }
 
 popd;
 
+$overlay_ports_path = (Join-Path "$($ScriptRoot)" ".ci\vcpkg\overlay-ports");
 $additional_vcpkg_flags = @("--x-no-default-features");
 $VCPKG_INSTALL_FEATURES | ForEach-Object { $additional_vcpkg_flags += "--x-feature=${PSItem}" };
 
 $vcpkg_succeeded = -1;
 $vcpkg_attempts = 0;
-Write-Output "vcpkg install --x-manifest-root=$($ScriptRoot) --x-install-root=.\vcpkg_installed\ $additional_vcpkg_flags";
+Write-Output "vcpkg install --x-manifest-root=$($ScriptRoot) --x-install-root=.\vcpkg_installed\ --overlay-ports=$($overlay_ports_path) $additional_vcpkg_flags";
 
 While (($vcpkg_succeeded -ne 0) -and ($vcpkg_attempts -le 2))
 {
-	& .\vcpkg\vcpkg install --x-manifest-root=$($ScriptRoot) --x-install-root=.\vcpkg_installed\ $additional_vcpkg_flags;
+	& .\vcpkg\vcpkg install --x-manifest-root=$($ScriptRoot) --x-install-root=.\vcpkg_installed\ --overlay-ports=$($overlay_ports_path) $additional_vcpkg_flags;
 	$vcpkg_succeeded = $LastExitCode;
 	$vcpkg_attempts++;
 }

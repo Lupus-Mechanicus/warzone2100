@@ -137,6 +137,9 @@ data/base/sequenceaudio/outro.txt
 data/mp/messages/strings/names.txt
 data/mp/messages/strings/resstrings.txt
 data/mp/multiplay/maps/10c-WaterLoop/game.js
+data/mp/multiplay/maps/2c-DustyMaze/game.js
+data/mp/multiplay/maps/4c-DustyMaze-2v2/game.js
+data/mp/multiplay/maps/4c-DustyMaze-FFA/game.js
 data/mp/multiplay/maps/6c-Entropy/game.js
 data/mp/multiplay/script/functions/camTechEnabler.js
 data/mp/multiplay/script/functions/weather.js
@@ -153,6 +156,7 @@ data/mp/multiplay/script/rules/events/gameloaded.js
 data/mp/multiplay/script/rules/events/research.js
 data/mp/multiplay/script/rules/events/structurebuilt.js
 data/mp/multiplay/script/rules/events/transfer.js
+data/mp/multiplay/script/rules/events/upgrade.js
 data/mp/multiplay/script/rules/includes.js
 data/mp/multiplay/script/rules/init.js
 data/mp/multiplay/script/rules/oildrum.js
@@ -170,6 +174,8 @@ data/mp/multiplay/script/rules/setup/techlevel.js
 data/mp/multiplay/script/rules/setupgame.js
 data/mp/multiplay/script/rules/variables.js
 data/mp/multiplay/script/scavengers/init.js
+data/mp/multiplay/script/scavengers/originalScavengers.js
+data/mp/multiplay/script/scavengers/ultimateScavengers.js
 data/mp/multiplay/skirmish/Cobra.js
 data/mp/multiplay/skirmish/bonecrusher/bonecrusher.js
 data/mp/multiplay/skirmish/bonecrusher/build-normal.js
@@ -297,6 +303,7 @@ lib/netplay/netjoin_stub.cpp
 lib/netplay/netlog.cpp
 lib/netplay/netplay.cpp
 lib/netplay/netqueue.cpp
+lib/netplay/netreplay.cpp
 lib/netplay/netsocket.cpp
 lib/netplay/nettypes.cpp
 lib/sdl/cursors_sdl.cpp
@@ -316,15 +323,21 @@ lib/sound/openal_info.cpp
 lib/sound/openal_track.cpp
 lib/sound/playlist.cpp
 lib/sound/track.cpp
+lib/widget/alignment.cpp
 lib/widget/bar.cpp
 lib/widget/button.cpp
+lib/widget/checkbox.cpp
 lib/widget/cliprect.cpp
 lib/widget/dropdown.cpp
 lib/widget/editbox.cpp
 lib/widget/form.cpp
+lib/widget/gridallocation.cpp
+lib/widget/gridlayout.cpp
 lib/widget/jsontable.cpp
 lib/widget/label.cpp
 lib/widget/listwidget.cpp
+lib/widget/margin.cpp
+lib/widget/minsize.cpp
 lib/widget/multibutform.cpp
 lib/widget/paragraph.cpp
 lib/widget/scrollablelist.cpp
@@ -333,6 +346,14 @@ lib/widget/slider.cpp
 lib/widget/table.cpp
 lib/widget/tip.cpp
 lib/widget/widget.cpp
+lib/wzmaplib/src/map.cpp
+lib/wzmaplib/src/map_crc.cpp
+lib/wzmaplib/src/map_debug.cpp
+lib/wzmaplib/src/map_internal.cpp
+lib/wzmaplib/src/map_io.cpp
+lib/wzmaplib/src/map_preview.cpp
+lib/wzmaplib/src/map_script.cpp
+lib/wzmaplib/src/map_terrain_types.cpp
 po/custom/fromJson.txt
 po/custom/mac-infoplist.txt
 po/custom/warzone2100.desktop.txt
@@ -380,6 +401,11 @@ src/hci/objects_stats.cpp
 src/hci/research.cpp
 src/ingameop.cpp
 src/init.cpp
+src/input/context.cpp
+src/input/debugmappings.cpp
+src/input/keyconfig.cpp
+src/input/manager.cpp
+src/input/mapping.cpp
 src/intdisplay.cpp
 src/integrations/wzdiscordrpc.cpp
 src/intelmap.cpp
@@ -387,7 +413,6 @@ src/intimage.cpp
 src/intorder.cpp
 src/keybind.cpp
 src/keyedit.cpp
-src/keymap.cpp
 src/levels.cpp
 src/lighting.cpp
 src/loadsave.cpp
@@ -407,6 +432,7 @@ src/multigifts.cpp
 src/multiint.cpp
 src/multijoin.cpp
 src/multilimit.cpp
+src/multilobbycommands.cpp
 src/multimenu.cpp
 src/multiopt.cpp
 src/multiplay.cpp
@@ -432,7 +458,9 @@ src/research.cpp
 src/scores.cpp
 src/selection.cpp
 src/seqdisp.cpp
+src/spectatorwidgets.cpp
 src/stats.cpp
+src/stdinreader.cpp
 src/structure.cpp
 src/template.cpp
 src/terrain.cpp
@@ -455,5 +483,6 @@ src/warzoneconfig.cpp
 src/wavecast.cpp
 src/wrappers.cpp
 src/wzapi.cpp
+src/wzcrashhandlingproviders.cpp
 src/wzpropertyproviders.cpp
 src/wzscriptdebug.cpp

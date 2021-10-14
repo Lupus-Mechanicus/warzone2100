@@ -25,6 +25,7 @@ file(GLOB VK_SHADERS
 	"${CMAKE_CURRENT_SOURCE_DIR}/base/shaders/vk/nolight.vert"
 	"${CMAKE_CURRENT_SOURCE_DIR}/base/shaders/vk/button.vert"
 	"${CMAKE_CURRENT_SOURCE_DIR}/base/shaders/vk/tcmask.vert"
+	"${CMAKE_CURRENT_SOURCE_DIR}/base/shaders/vk/skybox.vert"
 	"${CMAKE_CURRENT_SOURCE_DIR}/base/shaders/vk/rect.frag"
 	"${CMAKE_CURRENT_SOURCE_DIR}/base/shaders/vk/texturedrect.frag"
 	"${CMAKE_CURRENT_SOURCE_DIR}/base/shaders/vk/gfx.frag"
@@ -36,6 +37,7 @@ file(GLOB VK_SHADERS
 	"${CMAKE_CURRENT_SOURCE_DIR}/base/shaders/vk/nolight.frag"
 	"${CMAKE_CURRENT_SOURCE_DIR}/base/shaders/vk/button.frag"
 	"${CMAKE_CURRENT_SOURCE_DIR}/base/shaders/vk/tcmask.frag"
+	"${CMAKE_CURRENT_SOURCE_DIR}/base/shaders/vk/skybox.frag"
 )
 
 set(SHADER_LIST "")
@@ -58,7 +60,7 @@ if(GLSLC)
 	add_custom_target(glsl_compilation DEPENDS ${SHADER_LIST})
 	set_property(TARGET glsl_compilation PROPERTY FOLDER "data")
 else()
-	message(WARNING "Unable to find glslc")
+	message(STATUS "Unable to find glslc")
 endif()
 
 set(_glsl_generatedfiles_PATHS)

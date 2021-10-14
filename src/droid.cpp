@@ -89,7 +89,7 @@ DROID	*psLastDroidHit;
 static void groupConsoleInformOfSelection(UDWORD groupNumber);
 static void groupConsoleInformOfCreation(UDWORD groupNumber);
 static void groupConsoleInformOfCentering(UDWORD groupNumber);
-
+static void groupConsoleInformOfRemoval();
 static void droidUpdateDroidSelfRepair(DROID *psRepairDroid);
 static UDWORD calcDroidBaseBody(DROID *psDroid);
 
@@ -129,6 +129,10 @@ static void droidBodyUpgrade(DROID *psDroid)
 	psDroid->originalBody = calcDroidBaseBody(psDroid);
 	int increase = psDroid->originalBody * factor / prev;
 	psDroid->body = MIN(psDroid->originalBody, (psDroid->body * increase) / factor + 1);
+	DROID_TEMPLATE sTemplate;
+	templateSetParts(psDroid, &sTemplate);
+	// update engine too
+	psDroid->baseSpeed = calcDroidBaseSpeed(&sTemplate, psDroid->weight, psDroid->player);
 	if (isTransporter(psDroid))
 	{
 		for (DROID *psCurr = psDroid->psGroup->psList; psCurr != nullptr; psCurr = psCurr->psGrpNext)
@@ -243,7 +247,8 @@ int32_t droidDamage(DROID *psDroid, unsigned damage, WEAPON_CLASS weaponClass, W
 			audio_QueueTrackMinDelayPos(ID_SOUND_UNIT_DESTROYED, UNIT_LOST_DELAY,
 			                            psDroid->pos.x, psDroid->pos.y, psDroid->pos.z);
 		}
-		else
+		// only counts as a kill if it's not our ally
+		else if (selectedPlayer < MAX_PLAYERS && !aiCheckAlliances(psDroid->player, selectedPlayer))
 		{
 			scoreUpdateVar(WD_UNITS_KILLED);
 		}
@@ -410,8 +415,13 @@ void recycleDroid(DROID *psDroid)
 	vanishDroid(psDroid);
 
 	Vector3i position = psDroid->pos.xzy();
-	addEffect(&position, EFFECT_EXPLOSION, EXPLOSION_TYPE_DISCOVERY, false, nullptr, false, gameTime - deltaGameTime + 1);
-
+	const auto mapCoord = map_coord({psDroid->pos.x, psDroid->pos.y});
+	const auto psTile = mapTile(mapCoord);
+	if (tileIsClearlyVisible(psTile))
+	{
+		addEffect(&position, EFFECT_EXPLOSION, EXPLOSION_TYPE_DISCOVERY, false, nullptr, false, gameTime - deltaGameTime + 1);
+	}
+	
 	CHECK_DROID(psDroid);
 }
 
@@ -502,7 +512,7 @@ static void removeDroidFX(DROID *psDel, unsigned impactTime)
 	CHECK_DROID(psDel);
 
 	// only display anything if the droid is visible
-	if (!psDel->visible[selectedPlayer])
+	if (!psDel->visibleForLocalDisplay())
 	{
 		return;
 	}
@@ -538,7 +548,7 @@ static void removeDroidFX(DROID *psDel, unsigned impactTime)
 
 bool destroyDroid(DROID *psDel, unsigned impactTime)
 {
-	ASSERT(gameTime - deltaGameTime < impactTime, "Expected %u < %u, gameTime = %u, bad impactTime", gameTime - deltaGameTime, impactTime, gameTime);
+	ASSERT(gameTime - deltaGameTime <= impactTime, "Expected %u <= %u, gameTime = %u, bad impactTime", gameTime - deltaGameTime, impactTime, gameTime);
 
 	if (psDel->lastHitWeapon == WSC_LAS_SAT)		// darken tile if lassat.
 	{
@@ -552,7 +562,7 @@ bool destroyDroid(DROID *psDel, unsigned impactTime)
 			for (breadth = mapY - 1; breadth <= mapY + 1; breadth++)
 			{
 				psTile = mapTile(width, breadth);
-				if (TEST_TILE_VISIBLE(selectedPlayer, psTile))
+				if (TEST_TILE_VISIBLE_TO_SELECTEDPLAYER(psTile))
 				{
 					psTile->illumination /= 2;
 				}
@@ -713,7 +723,7 @@ void droidUpdate(DROID *psDroid)
 	moveUpdateDroid(psDroid);
 
 	/* Only add smoke if they're visible */
-	if ((psDroid->visible[selectedPlayer]) && psDroid->droidType != DROID_PERSON)
+	if (psDroid->visibleForLocalDisplay() && psDroid->droidType != DROID_PERSON)
 	{
 		// need to clip this value to prevent overflow condition
 		percentDamage = 100 - clip<UDWORD>(PERCENT(psDroid->body, psDroid->originalBody), 0, 100);
@@ -763,14 +773,63 @@ void droidUpdate(DROID *psDroid)
 			psBeingTargetted->flags.set(OBJECT_FLAG_TARGETED, true);
 		}
 	}
-	// -----------------
+	// ------------------------
+	// if we are a repair turret, then manage incoming damaged droids, (just like repair facility)
+	// unlike a repair facility
+	// 	- we don't really need to move droids to us, we can come ourselves
+	//	- we don't steal work from other repair turrets/ repair facilities
+	DROID *psOther;
+	if (psDroid->player == selectedPlayer && (psDroid->droidType == DROID_REPAIR || psDroid->droidType == DROID_CYBORG_REPAIR))
+	{
+		for (psOther = apsDroidLists[psDroid->player]; psOther; psOther = psOther->psNext)
+		{
+			// unlike repair facility, no droid  can have DORDER_RTR_SPECIFIED with another droid as target, so skip that check
+			if (psOther->order.type == DORDER_RTR && 
+					psOther->order.rtrType == RTR_TYPE_DROID &&
+					psOther->action != DACTION_WAITFORREPAIR &&
+					psOther->action != DACTION_MOVETOREPAIRPOINT &&
+					psOther->action != DACTION_WAITDURINGREPAIR)
+			{
+				if (psOther->body >= psOther->originalBody)
+				{
+					// set droid points to max
+					psOther->body = psOther->originalBody;
+					// if completely repaired reset order
+					secondarySetState(psOther, DSO_RETURN_TO_LOC, DSS_NONE);
 
+					if (hasCommander(psOther))
+					{
+						// return a droid to it's command group
+						DROID	*psCommander = psOther->psGroup->psCommander;
+						orderDroidObj(psOther, DORDER_GUARD, psCommander, ModeImmediate);
+					}
+					continue;
+				}
+			}
+
+			else if (psOther->order.rtrType == RTR_TYPE_DROID 
+					//is being, or waiting for repairs..
+					&& (psOther->action == DACTION_WAITFORREPAIR || psOther->action == DACTION_WAITDURINGREPAIR)
+					// don't steal work from others
+					&& psOther->order.psObj == psDroid)
+			{
+				if (!actionReachedDroid(psDroid, psOther))
+				{
+					objTrace(psOther->id, "Moving closer to repair droid");
+					actionDroid(psOther, DACTION_MOVE, psDroid, psDroid->pos.x, psDroid->pos.y);
+				}
+				
+			}
+		}
+	}
+	// ------------------------
 	// See if we can and need to self repair.
 	if (!isVtolDroid(psDroid) && psDroid->body < psDroid->originalBody && psDroid->asBits[COMP_REPAIRUNIT] != 0 && selfRepairEnabled(psDroid->player))
 	{
 		droidUpdateDroidSelfRepair(psDroid);
 	}
 
+	
 	/* Update the fire damage data */
 	if (psDroid->periodicalDamageStart != 0 && psDroid->periodicalDamageStart != gameTime - deltaGameTime)  // -deltaGameTime, since projectiles are updated after droids.
 	{
@@ -854,7 +913,7 @@ static bool droidBuildStartAudioCallback(void *psObj)
 {
 	auto psDroid = (DROID *)psObj;
 
-	if (psDroid != nullptr && psDroid->visible[selectedPlayer])
+	if (psDroid != nullptr && psDroid->visibleForLocalDisplay())
 	{
 		audio_PlayObjDynamicTrack(psDroid, ID_SOUND_CONSTRUCTION_LOOP, droidCheckBuildStillInProgress);
 	}
@@ -938,7 +997,7 @@ DroidStartBuild droidStartBuild(DROID *psDroid)
 			objTrace(psDroid->id, "DroidStartBuild: set target");
 		}
 
-		if (psStruct->visible[selectedPlayer])
+		if (psStruct->visibleForLocalDisplay())
 		{
 			audio_PlayObjStaticTrackCallback(psDroid, ID_SOUND_CONSTRUCTION_START, droidBuildStartAudioCallback);
 		}
@@ -958,7 +1017,7 @@ static void droidAddWeldSound(Vector3i iVecEffect)
 
 static void addConstructorEffect(STRUCTURE *psStruct)
 {
-	if ((ONEINTEN) && (psStruct->visible[selectedPlayer]))
+	if ((ONEINTEN) && (psStruct->visibleForLocalDisplay()))
 	{
 		/* This needs fixing - it's an arse effect! */
 		const Vector2i size = psStruct->size() * TILE_UNITS / 4;
@@ -1167,7 +1226,7 @@ static bool droidUpdateDroidRepairBase(DROID *psRepairDroid, DROID *psDroidToRep
 	psDroidToRepair->body = clip<UDWORD>(psDroidToRepair->body + iPointsToAdd, 0, psDroidToRepair->originalBody);
 
 	/* add plasma repair effect whilst being repaired */
-	if ((ONEINFIVE) && (psDroidToRepair->visible[selectedPlayer]))
+	if ((ONEINFIVE) && (psDroidToRepair->visibleForLocalDisplay()))
 	{
 		Vector3i iVecEffect = (psDroidToRepair->pos + Vector3i(DROID_REPAIR_SPREAD, DROID_REPAIR_SPREAD, rand() % 8)).xzy();
 		effectGiveAuxVar(90 + rand() % 20);
@@ -1176,7 +1235,6 @@ static bool droidUpdateDroidRepairBase(DROID *psRepairDroid, DROID *psDroidToRep
 	}
 
 	CHECK_DROID(psRepairDroid);
-
 	/* if not finished repair return true else complete repair and return false */
 	return psDroidToRepair->body < psDroidToRepair->originalBody;
 }
@@ -1188,8 +1246,20 @@ bool droidUpdateDroidRepair(DROID *psRepairDroid)
 
 	DROID *psDroidToRepair = (DROID *)psRepairDroid->psActionTarget[0];
 	ASSERT_OR_RETURN(false, psDroidToRepair->type == OBJ_DROID, "Target is not a unit");
-
-	return droidUpdateDroidRepairBase(psRepairDroid, psDroidToRepair);
+	bool needMoreRepair = droidUpdateDroidRepairBase(psRepairDroid, psDroidToRepair);
+	if (needMoreRepair && psDroidToRepair->order.type == DORDER_RTR && psDroidToRepair->order.rtrType == RTR_TYPE_DROID && psDroidToRepair->action == DACTION_NONE)
+	{
+		psDroidToRepair->action = DACTION_WAITDURINGREPAIR;
+	}
+	if (!needMoreRepair && psDroidToRepair->order.type == DORDER_RTR && psDroidToRepair->order.rtrType == RTR_TYPE_DROID)
+	{
+		// if psDroidToRepair has a commander, commander will call him back anyway
+		// if no commanders, just DORDER_GUARD the repair turret
+		orderDroidObj(psDroidToRepair, DORDER_GUARD, psRepairDroid, ModeImmediate);
+		secondarySetState(psDroidToRepair, DSO_RETURN_TO_LOC, DSS_NONE);
+		psDroidToRepair->order.psObj = nullptr;
+	}
+	return needMoreRepair;
 }
 
 static void droidUpdateDroidSelfRepair(DROID *psRepairDroid)
@@ -1282,9 +1352,13 @@ static unsigned calcSum(const uint8_t (&asParts)[DROID_MAXCOMP], int numWeaps, c
 	return sum;
 }
 
+#define ASSERT_PLAYER_OR_RETURN(retVal, player) \
+	ASSERT_OR_RETURN(retVal, player >= 0 && player < MAX_PLAYERS, "Invalid player: %" PRIu32 "", player);
+
 template <typename F, typename G>
 static unsigned calcUpgradeSum(const uint8_t (&asParts)[DROID_MAXCOMP], int numWeaps, const uint32_t (&asWeaps)[MAX_WEAPONS], int player, F func, G propulsionFunc)
 {
+	ASSERT_PLAYER_OR_RETURN(0, player);
 	unsigned sum =
 		func(asBrainStats    [asParts[COMP_BRAIN]].upgrade[player]) +
 		func(asSensorStats   [asParts[COMP_SENSOR]].upgrade[player]) +
@@ -1495,6 +1569,8 @@ DROID *reallyBuildDroid(const DROID_TEMPLATE *pTemplate, Position pos, UDWORD pl
 	// Don't use this assertion in single player, since droids can finish building while on an away mission
 	ASSERT(!bMultiPlayer || worldOnMap(pos.x, pos.y), "the build locations are not on the map");
 
+	ASSERT_OR_RETURN(nullptr, player < MAX_PLAYERS, "Invalid player: %" PRIu32 "", player);
+
 	DROID *psDroid = new DROID(generateSynchronisedObjectId(), player);
 	droidSetName(psDroid, getStatsName(pTemplate));
 
@@ -1597,6 +1673,7 @@ DROID *reallyBuildDroid(const DROID_TEMPLATE *pTemplate, Position pos, UDWORD pl
 
 DROID *buildDroid(DROID_TEMPLATE *pTemplate, UDWORD x, UDWORD y, UDWORD player, bool onMission, const INITIAL_DROID_ORDERS *initialOrders, Rotation rot)
 {
+	ASSERT_OR_RETURN(nullptr, player < MAX_PLAYERS, "invalid player?: %" PRIu32 "", player);
 	// ajl. droid will be created, so inform others
 	if (bMultiMessages)
 	{
@@ -1696,6 +1773,8 @@ void assignDroidsToGroup(UDWORD	playerNumber, UDWORD groupNumber, bool clearGrou
 	bool	bAtLeastOne = false;
 	FLAG_POSITION	*psFlagPos;
 
+	ASSERT_OR_RETURN(, playerNumber < MAX_PLAYERS, "Invalid player: %" PRIu32 "", playerNumber);
+
 	if (groupNumber < UBYTE_MAX)
 	{
 		/* Run through all the droids */
@@ -1719,6 +1798,7 @@ void assignDroidsToGroup(UDWORD	playerNumber, UDWORD groupNumber, bool clearGrou
 	if (bAtLeastOne)
 	{
 		//clear the Deliv Point if one
+		ASSERT_OR_RETURN(, selectedPlayer < MAX_PLAYERS, "Unsupported selectedPlayer: %" PRIu32 "", selectedPlayer);
 		for (psFlagPos = apsFlagPosLists[selectedPlayer]; psFlagPos;
 		     psFlagPos = psFlagPos->psNext)
 		{
@@ -1730,11 +1810,34 @@ void assignDroidsToGroup(UDWORD	playerNumber, UDWORD groupNumber, bool clearGrou
 }
 
 
+void removeDroidsFromGroup(UDWORD playerNumber)
+{
+	DROID	*psDroid;
+	unsigned removedCount = 0;
+
+	ASSERT_OR_RETURN(, playerNumber < MAX_PLAYERS, "Invalid player: %" PRIu32 "", playerNumber);
+
+	for (psDroid = apsDroidLists[playerNumber]; psDroid != nullptr; psDroid = psDroid->psNext)
+	{
+		if (psDroid->selected)
+		{
+			psDroid->group = UBYTE_MAX;
+			removedCount++;
+		}
+	}
+	if (removedCount)
+	{
+		groupConsoleInformOfRemoval();
+	}
+}
+
 bool activateGroupAndMove(UDWORD playerNumber, UDWORD groupNumber)
 {
 	DROID	*psDroid, *psCentreDroid = nullptr;
 	bool selected = false;
 	FLAG_POSITION	*psFlagPos;
+
+	ASSERT_OR_RETURN(false, playerNumber < MAX_PLAYERS, "Invalid player: %" PRIu32 "", playerNumber);
 
 	if (groupNumber < UBYTE_MAX)
 	{
@@ -1757,10 +1860,14 @@ bool activateGroupAndMove(UDWORD playerNumber, UDWORD groupNumber)
 		if (psCentreDroid)
 		{
 			//clear the Deliv Point if one
-			for (psFlagPos = apsFlagPosLists[selectedPlayer]; psFlagPos;
-			     psFlagPos = psFlagPos->psNext)
+			ASSERT(selectedPlayer < MAX_PLAYERS, "Unsupported selectedPlayer: %" PRIu32 "", selectedPlayer);
+			if (selectedPlayer < MAX_PLAYERS)
 			{
-				psFlagPos->selected = false;
+				for (psFlagPos = apsFlagPosLists[selectedPlayer]; psFlagPos;
+					 psFlagPos = psFlagPos->psNext)
+				{
+					psFlagPos->selected = false;
+				}
 			}
 
 			selected = true;
@@ -1786,11 +1893,45 @@ bool activateGroupAndMove(UDWORD playerNumber, UDWORD groupNumber)
 	return selected;
 }
 
+bool activateNoGroup(UDWORD playerNumber, const SELECTIONTYPE selectionType, const SELECTION_CLASS selectionClass, const bool bOnScreen) {
+	DROID	*psDroid;
+	bool selected = false;
+	FLAG_POSITION	*psFlagPos;
+	SELECTIONTYPE dselectionType = selectionType;
+	SELECTION_CLASS dselectionClass = selectionClass;
+	bool dbOnScreen = bOnScreen;
+
+	ASSERT_OR_RETURN(false, playerNumber < MAX_PLAYERS, "Invalid player: %" PRIu32 "", playerNumber);
+
+	selDroidSelection(selectedPlayer, dselectionClass, dselectionType, dbOnScreen);
+	for (psDroid = apsDroidLists[playerNumber]; psDroid; psDroid = psDroid->psNext)
+	{
+		/* Wipe out the ones in the wrong group */
+		if (psDroid->selected && psDroid->group != UBYTE_MAX)
+		{
+			DeSelectDroid(psDroid);
+		}
+	}
+	if (selected)
+	{
+		//clear the Deliv Point if one
+		ASSERT_OR_RETURN(false, selectedPlayer < MAX_PLAYERS, "Unsupported selectedPlayer: %" PRIu32 "", selectedPlayer);
+		for (psFlagPos = apsFlagPosLists[selectedPlayer]; psFlagPos;
+		     psFlagPos = psFlagPos->psNext)
+		{
+			psFlagPos->selected = false;
+		}
+	}
+	return selected;
+}
+
 bool activateGroup(UDWORD playerNumber, UDWORD groupNumber)
 {
 	DROID	*psDroid;
 	bool selected = false;
 	FLAG_POSITION	*psFlagPos;
+
+	ASSERT_OR_RETURN(false, playerNumber < MAX_PLAYERS, "Invalid player: %" PRIu32 "", playerNumber);
 
 	if (groupNumber < UBYTE_MAX)
 	{
@@ -1813,6 +1954,7 @@ bool activateGroup(UDWORD playerNumber, UDWORD groupNumber)
 	if (selected)
 	{
 		//clear the Deliv Point if one
+		ASSERT_OR_RETURN(false, selectedPlayer < MAX_PLAYERS, "Unsupported selectedPlayer: %" PRIu32 "", selectedPlayer);
 		for (psFlagPos = apsFlagPosLists[selectedPlayer]; psFlagPos;
 		     psFlagPos = psFlagPos->psNext)
 		{
@@ -1839,6 +1981,16 @@ void	groupConsoleInformOfCreation(UDWORD groupNumber)
 		CONPRINTF(ngettext("%u unit assigned to Group %u", "%u units assigned to Group %u", num_selected), num_selected, groupNumber);
 	}
 
+}
+
+void 	groupConsoleInformOfRemoval()
+{
+	if (!getWarCamStatus())
+	{
+		unsigned int num_selected = selNumSelected(selectedPlayer);
+
+		CONPRINTF(ngettext("%u units removed from their Group", "%u units removed from their Group", num_selected), num_selected);
+	}
 }
 
 void	groupConsoleInformOfCentering(UDWORD groupNumber)
@@ -2030,7 +2182,7 @@ UDWORD	getNumDroidsForLevel(uint32_t player, UDWORD level)
 	DROID	*psDroid;
 	UDWORD	count;
 
-	ASSERT_OR_RETURN(0, player < MAX_PLAYERS, "invalid player idx: %" PRIu32 "", player);
+	if (player >= MAX_PLAYERS) { return 0; }
 
 	for (psDroid = apsDroidLists[player], count = 0;
 	     psDroid; psDroid = psDroid->psNext)
@@ -2195,7 +2347,7 @@ static bool ThreatInRange(SDWORD player, SDWORD range, SDWORD rangeX, SDWORD ran
 					case REF_REARM_PAD:
 
 						if (range < 0
-						    || world_coord(hypotf(tx - map_coord(psStruct->pos.x), ty - map_coord(psStruct->pos.y))) < range)	//enemy in range
+						    || world_coord(static_cast<int32_t>(hypotf(tx - map_coord(psStruct->pos.x), ty - map_coord(psStruct->pos.y)))) < range)	//enemy in range
 						{
 							return true;
 						}
@@ -2223,7 +2375,7 @@ static bool ThreatInRange(SDWORD player, SDWORD range, SDWORD rangeX, SDWORD ran
 				}
 
 				if (range < 0
-				    || world_coord(hypotf(tx - map_coord(psDroid->pos.x), ty - map_coord(psDroid->pos.y))) < range)	//enemy in range
+				    || world_coord(static_cast<int32_t>(hypotf(tx - map_coord(psDroid->pos.x), ty - map_coord(psDroid->pos.y)))) < range)	//enemy in range
 				{
 					return true;
 				}
@@ -2430,14 +2582,7 @@ void setUpBuildModule(DROID *psDroid)
 /* Just returns true if the droid's present body points aren't as high as the original*/
 bool	droidIsDamaged(const DROID *psDroid)
 {
-	if (psDroid->body < psDroid->originalBody)
-	{
-		return (true);
-	}
-	else
-	{
-		return (false);
-	}
+	return psDroid->body < psDroid->originalBody;
 }
 
 
@@ -2622,7 +2767,7 @@ bool vtolReadyToRearm(DROID *psDroid, STRUCTURE *psStruct)
 	}
 
 	STRUCTURE *psTarget = castStructure(psDroid->psActionTarget[0]);
-	if (psTarget && psTarget->pFunctionality->rearmPad.psObj == psDroid)
+	if (psTarget && psTarget->pFunctionality && psTarget->pFunctionality->rearmPad.psObj == psDroid)
 	{
 		// vtol is rearming at a different base, leave it alone
 		objTrace(psDroid->id, "rearm pad at %d,%d won't snatch us - we already are snatched by %d,%d", psStruct->pos.x / TILE_UNITS, psStruct->pos.y / TILE_UNITS, psTarget->pos.x / TILE_UNITS, psTarget->pos.y / TILE_UNITS);
@@ -2922,6 +3067,7 @@ DROID *giftSingleDroid(DROID *psD, UDWORD to, bool electronic)
 	CHECK_DROID(psD);
 	ASSERT_OR_RETURN(nullptr, !isDead(psD), "Cannot gift dead unit");
 	ASSERT_OR_RETURN(psD, psD->player != to, "Cannot gift to self");
+	ASSERT_OR_RETURN(nullptr, to < MAX_PLAYERS, "Cannot gift to = %" PRIu32 "", to);
 
 	// Check unit limits (multiplayer only)
 	syncDebug("Limits: %u/%d %u/%d %u/%d", getNumDroids(to), getMaxDroids(to), getNumConstructorDroids(to), getMaxConstructors(to), getNumCommandDroids(to), getMaxCommanders(to));

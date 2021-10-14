@@ -56,6 +56,10 @@
 #include "cocoa_wz_menus.h"
 #endif
 
+#include <optional-lite/optional.hpp>
+using nonstd::optional;
+using nonstd::nullopt;
+
 void mainLoop();
 // used in crash reports & version info
 const char *BACKEND = "SDL";
@@ -183,6 +187,8 @@ static InputKey	pInputBuffer[INPUT_MAXSTR];
 static InputKey	*pStartBuffer, *pEndBuffer;
 static utf_32_char *utf8Buf;				// is like the old 'unicode' from SDL 1.x
 void* GetTextEventsOwner = nullptr;
+
+static optional<int> wzQuitExitCode;
 
 /**************************/
 /***     Misc support   ***/
@@ -607,21 +613,48 @@ bool wzIsMaximized()
 	return false;
 }
 
-void wzQuit()
+void wzQuit(int exitCode)
 {
+	if (!wzQuitExitCode.has_value())
+	{
+		wzQuitExitCode = exitCode;
+	}
 	// Create a quit event to halt game loop.
 	SDL_Event quitEvent;
 	quitEvent.type = SDL_QUIT;
 	SDL_PushEvent(&quitEvent);
 }
 
+int wzGetQuitExitCode()
+{
+	return wzQuitExitCode.value_or(0);
+}
+
 void wzGrabMouse()
 {
+	if (!WZbackend.has_value())
+	{
+		return;
+	}
+	if (WZwindow == nullptr)
+	{
+		debug(LOG_WARNING, "wzGrabMouse called when window is not available - ignoring");
+		return;
+	}
 	SDL_SetWindowGrab(WZwindow, SDL_TRUE);
 }
 
 void wzReleaseMouse()
 {
+	if (!WZbackend.has_value())
+	{
+		return;
+	}
+	if (WZwindow == nullptr)
+	{
+		debug(LOG_WARNING, "wzReleaseMouse called when window is not available - ignoring");
+		return;
+	}
 	SDL_SetWindowGrab(WZwindow, SDL_FALSE);
 }
 
@@ -943,6 +976,37 @@ void keyScanToString(KEY_CODE code, char *ascii, UDWORD maxStringSize)
 	else
 	{
 		strcpy(ascii, "???");
+	}
+}
+
+void mouseKeyCodeToString(const MOUSE_KEY_CODE code, char* ascii, const int maxStringLength)
+{
+	switch (code)
+	{
+	case MOUSE_KEY_CODE::MOUSE_LMB:
+		strcpy(ascii, "Mouse Left");
+		break;
+	case MOUSE_KEY_CODE::MOUSE_MMB:
+		strcpy(ascii, "Mouse Middle");
+		break;
+	case MOUSE_KEY_CODE::MOUSE_RMB:
+		strcpy(ascii, "Mouse Right");
+		break;
+	case MOUSE_KEY_CODE::MOUSE_X1:
+		strcpy(ascii, "Mouse 4");
+		break;
+	case MOUSE_KEY_CODE::MOUSE_X2:
+		strcpy(ascii, "Mouse 5");
+		break;
+	case MOUSE_KEY_CODE::MOUSE_WUP:
+		strcpy(ascii, "Mouse Wheel Up");
+		break;
+	case MOUSE_KEY_CODE::MOUSE_WDN:
+		strcpy(ascii, "Mouse Wheel Down");
+		break;
+	default:
+		strcpy(ascii, "Mouse ???");
+		break;
 	}
 }
 
@@ -1477,10 +1541,10 @@ void handleWindowSizeChange(unsigned int oldWidth, unsigned int oldHeight, unsig
 	// NOTE: This function receives the window size in the window's logical units, but not accounting for the interface scale factor.
 	// Therefore, the provided old/newWidth/Height must be divided by the interface scale factor to calculate the new
 	// *game* screen logical width / height.
-	unsigned int oldScreenWidth = oldWidth / current_displayScaleFactor;
-	unsigned int oldScreenHeight = oldHeight / current_displayScaleFactor;
-	unsigned int newScreenWidth = newWidth / current_displayScaleFactor;
-	unsigned int newScreenHeight = newHeight / current_displayScaleFactor;
+	unsigned int oldScreenWidth = static_cast<unsigned int>(oldWidth / current_displayScaleFactor);
+	unsigned int oldScreenHeight = static_cast<unsigned int>(oldHeight / current_displayScaleFactor);
+	unsigned int newScreenWidth = static_cast<unsigned int>(newWidth / current_displayScaleFactor);
+	unsigned int newScreenHeight = static_cast<unsigned int>(newHeight / current_displayScaleFactor);
 
 	handleGameScreenSizeChange(oldScreenWidth, oldScreenHeight, newScreenWidth, newScreenHeight);
 
@@ -1523,7 +1587,7 @@ float wzGetMaximumDisplayScaleFactorForWindowSize(unsigned int width, unsigned i
 unsigned int wzGetMaximumDisplayScaleForWindowSize(unsigned int width, unsigned int height)
 {
 	float maxDisplayScaleFactor = wzGetMaximumDisplayScaleFactorForWindowSize(width, height);
-	unsigned int maxDisplayScalePercentage = floor(maxDisplayScaleFactor * 100.f);
+	unsigned int maxDisplayScalePercentage = static_cast<unsigned int>(floor(maxDisplayScaleFactor * 100.f));
 
 	auto availableDisplayScales = wzAvailableDisplayScales();
 	std::sort(availableDisplayScales.begin(), availableDisplayScales.end());
@@ -1617,7 +1681,7 @@ static bool win_IsProcessDPIAware()
 	HMODULE hShcore = LoadLibraryW(L"Shcore.dll");
 	if (hShcore != NULL)
 	{
-		const auto* func_getProcessDpiAwareness = reinterpret_cast<GetProcessDpiAwarenessFunction>(reinterpret_cast<void*>(GetProcAddress(hShcore, "GetProcessDpiAwareness")));
+		GetProcessDpiAwarenessFunction func_getProcessDpiAwareness = reinterpret_cast<GetProcessDpiAwarenessFunction>(reinterpret_cast<void*>(GetProcAddress(hShcore, "GetProcessDpiAwareness")));
 		if (func_getProcessDpiAwareness)
 		{
 			PROCESS_DPI_AWARENESS result = PROCESS_DPI_UNAWARE;
@@ -1631,7 +1695,7 @@ static bool win_IsProcessDPIAware()
 	}
 	HMODULE hUser32 = LoadLibraryW(L"User32.dll");
 	ASSERT_OR_RETURN(false, hUser32 != NULL, "Unable to get handle to User32?");
-	const auto* func_isProcessDPIAware = reinterpret_cast<IsProcessDPIAwareFunction>(reinterpret_cast<void*>(GetProcAddress(hUser32, "IsProcessDPIAware")));
+	IsProcessDPIAwareFunction func_isProcessDPIAware = reinterpret_cast<IsProcessDPIAwareFunction>(reinterpret_cast<void*>(GetProcAddress(hUser32, "IsProcessDPIAware")));
 	bool bIsProcessDPIAware = false;
 	if (func_isProcessDPIAware)
 	{
@@ -1723,6 +1787,12 @@ unsigned int wzGetDefaultBaseDisplayScale(int displayIndex)
 
 bool wzChangeDisplayScale(unsigned int displayScale)
 {
+	if (WZwindow == nullptr)
+	{
+		debug(LOG_WARNING, "wzChangeDisplayScale called when window is not available");
+		return false;
+	}
+
 	float newDisplayScaleFactor = (float)displayScale / 100.f;
 
 	if (wzWindowSizeIsSmallerThanMinimumRequired(windowWidth, windowHeight, newDisplayScaleFactor))
@@ -1743,10 +1813,10 @@ bool wzChangeDisplayScale(unsigned int displayScale)
 	// Update the game's logical screen size
 	unsigned int oldScreenWidth = screenWidth, oldScreenHeight = screenHeight;
 	unsigned int newScreenWidth = windowWidth, newScreenHeight = windowHeight;
-	if (newDisplayScaleFactor > 1.0)
+	if (newDisplayScaleFactor > 1.0f)
 	{
-		newScreenWidth = windowWidth / newDisplayScaleFactor;
-		newScreenHeight = windowHeight / newDisplayScaleFactor;
+		newScreenWidth = static_cast<unsigned int>(windowWidth / newDisplayScaleFactor);
+		newScreenHeight = static_cast<unsigned int>(windowHeight / newDisplayScaleFactor);
 	}
 	handleGameScreenSizeChange(oldScreenWidth, oldScreenHeight, newScreenWidth, newScreenHeight);
 	gameDisplayScaleFactorDidChange(newDisplayScaleFactor);
@@ -1887,7 +1957,7 @@ bool wzChangeWindowResolution(int screen, unsigned int width, unsigned int heigh
 // Returns the current window screen, width, and height
 void wzGetWindowResolution(int *screen, unsigned int *width, unsigned int *height)
 {
-	assert(WZwindow != nullptr);
+	ASSERT_OR_RETURN(, WZwindow != nullptr, "wzGetWindowResolution called when window is not available");
 
 	if (screen != nullptr)
 	{
@@ -2367,8 +2437,8 @@ optional<SDL_gfx_api_Impl_Factory::Configuration> wzMainScreenSetup_CreateVideoW
 	screenHeight = windowHeight;
 	if (current_displayScaleFactor > 1.0f)
 	{
-		screenWidth = windowWidth / current_displayScaleFactor;
-		screenHeight = windowHeight / current_displayScaleFactor;
+		screenWidth = static_cast<unsigned int>(windowWidth / current_displayScaleFactor);
+		screenHeight = static_cast<unsigned int>(windowHeight / current_displayScaleFactor);
 	}
 	pie_SetVideoBufferWidth(screenWidth);
 	pie_SetVideoBufferHeight(screenHeight);
@@ -2585,7 +2655,7 @@ void wzGetWindowToRendererScaleFactor(float *horizScaleFactor, float *vertScaleF
 		}
 		return;
 	}
-	assert(WZwindow != nullptr);
+	ASSERT_OR_RETURN(, WZwindow != nullptr, "wzGetWindowToRendererScaleFactor called when window is not available");
 
 	// Obtain the window context's drawable size in pixels
 	int drawableWidth, drawableHeight = 0;
@@ -2678,6 +2748,11 @@ void wzSetWindowIsResizable(bool resizable)
 
 bool wzIsWindowResizable()
 {
+	if (WZwindow == nullptr)
+	{
+		debug(LOG_WARNING, "wzIsWindowResizable called when window is not available");
+		return false;
+	}
 	Uint32 flags = SDL_GetWindowFlags(WZwindow);
 	if (flags & SDL_WINDOW_RESIZABLE)
 	{
@@ -2861,4 +2936,20 @@ void wzShutdown()
 		copied_argv = nullptr;
 		copied_argc = 0;
 	}
+}
+
+// NOTE: wzBackendAttemptOpenURL should *not* be called directly - instead, call openURLInBrowser() from urlhelpers.h
+bool wzBackendAttemptOpenURL(const char *url)
+{
+#if SDL_VERSION_ATLEAST(2, 0, 14) // SDL >= 2.0.14
+	// Can use SDL_OpenURL to support many (not all) platforms if run-time SDL library is also >= 2.0.14
+	SDL_version linked_sdl_version;
+	SDL_GetVersion(&linked_sdl_version);
+	if ((linked_sdl_version.major > 2) || (linked_sdl_version.major == 2 && (linked_sdl_version.minor > 0 || (linked_sdl_version.minor == 0 && linked_sdl_version.patch >= 14))))
+	{
+		return (SDL_OpenURL(url) == 0);
+	}
+#endif
+	// SDL_OpenURL requires SDL >= 2.0.14
+	return false;
 }

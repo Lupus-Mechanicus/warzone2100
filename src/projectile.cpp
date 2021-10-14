@@ -97,7 +97,7 @@ static const uint32_t ProjectileTrackerID = 0xdead0000;
 static uint32_t projectileTrackerIDIncrement = 0;
 
 /* The list of projectiles in play */
-static std::vector<PROJECTILE *> psProjectileList;
+static std::vector<PROJECTILE*> psProjectileList;
 
 /* The next projectile to give out in the proj_First / proj_Next methods */
 static ProjectileIterator psProjectileNext;
@@ -154,7 +154,7 @@ bool gfxVisible(PROJECTILE *psObj)
 	    && psObj->psSource->player != selectedPlayer
 	    && (psObj->psDest == nullptr
 	        || psObj->psDest->died
-	        || !psObj->psDest->visible[selectedPlayer]))
+	        || !psObj->psDest->visibleForLocalDisplay()))
 	{
 		return false;
 	}
@@ -165,7 +165,7 @@ bool gfxVisible(PROJECTILE *psObj)
 	    && psObj->psDest->type == OBJ_STRUCTURE
 	    && psObj->psDest->player != selectedPlayer
 	    && (psObj->psSource == nullptr
-	        || !psObj->psSource->visible[selectedPlayer]))
+	        || !psObj->psSource->visibleForLocalDisplay()))
 	{
 		return false;
 	}
@@ -173,7 +173,7 @@ bool gfxVisible(PROJECTILE *psObj)
 	// You can see the source
 	if (psObj->psSource != nullptr
 	    && !psObj->psSource->died
-	    && psObj->psSource->visible[selectedPlayer])
+	    && psObj->psSource->visibleForLocalDisplay())
 	{
 		return true;
 	}
@@ -181,7 +181,7 @@ bool gfxVisible(PROJECTILE *psObj)
 	// You can see the destination
 	if (psObj->psDest != nullptr
 	    && !psObj->psDest->died
-	    && psObj->psDest->visible[selectedPlayer])
+	    && psObj->psDest->visibleForLocalDisplay())
 	{
 		return true;
 	}
@@ -211,6 +211,10 @@ proj_InitSystem()
 void
 proj_FreeAllProjectiles()
 {
+	for (auto proj: psProjectileList)
+	{
+		delete proj;
+	}
 	psProjectileList.clear();
 	psProjectileNext = psProjectileList.end();
 }
@@ -1175,8 +1179,13 @@ static void proj_ImpactFunc(PROJECTILE *psObj)
 		/* Note when it exploded for the explosion effect */
 		psObj->born = gameTime;
 
+		// If projectile impacts a droid start the splash damage from the center of it, else use whatever location the projectile impacts at as the splash center.
+		auto destDroid = castDroid(psObj->psDest);
+		Vector3i targetPos = (destDroid != nullptr) ? destDroid->pos : psObj->pos;
+
 		static GridList gridList;  // static to avoid allocations.
-		gridList = gridStartIterate(psObj->pos.x, psObj->pos.y, psStats->upgrade[psObj->player].radius);
+		gridList = gridStartIterate(targetPos.x, targetPos.y, psStats->upgrade[psObj->player].radius);
+
 		for (GridIterator gi = gridList.begin(); gi != gridList.end(); ++gi)
 		{
 			BASE_OBJECT *psCurr = *gi;
@@ -1222,7 +1231,7 @@ static void proj_ImpactFunc(PROJECTILE *psObj)
 			{
 				continue;  // Target in air, and can't shoot at air, or target on ground, and can't shoot at ground.
 			}
-			if (useSphere && !Vector3i_InSphere(psCurr->pos, psObj->pos, psStats->upgrade[psObj->player].radius))
+			if (useSphere && !Vector3i_InSphere(psCurr->pos, targetPos, psStats->upgrade[psObj->player].radius))
 			{
 				continue;  // Target out of range.
 			}
@@ -1448,21 +1457,27 @@ bool proj_Direct(const WEAPON_STATS *psStats)
 
 /***************************************************************************/
 
+#define ASSERT_PLAYER_OR_RETURN(retVal, player) \
+	ASSERT_OR_RETURN(retVal, player >= 0 && player < MAX_PLAYERS, "Invalid player: %" PRIu32 "", player);
+
 // return the maximum range for a weapon
 int proj_GetLongRange(const WEAPON_STATS *psStats, int player)
 {
+	ASSERT_PLAYER_OR_RETURN(0, player);
 	return psStats->upgrade[player].maxRange;
 }
 
 // return the minimum range for a weapon
 int proj_GetMinRange(const WEAPON_STATS *psStats, int player)
 {
+	ASSERT_PLAYER_OR_RETURN(0, player);
 	return psStats->upgrade[player].minRange;
 }
 
 // return the short range for a weapon
 int proj_GetShortRange(const WEAPON_STATS *psStats, int player)
 {
+	ASSERT_PLAYER_OR_RETURN(0, player);
 	return psStats->upgrade[player].shortRange;
 }
 

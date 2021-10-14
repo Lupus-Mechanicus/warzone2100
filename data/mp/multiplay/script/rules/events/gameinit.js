@@ -39,7 +39,7 @@ function eventGameInit()
 		setupBase(playnum);
 		
 		//From script/setup/setuptechlevels.js
-		seupTechLevel(playnum);
+		setupTechLevel(playnum);
 
 	}
 
@@ -51,7 +51,6 @@ function eventGameInit()
 	//From script/rules/reticule.js
 	setMainReticule();
 
-	setTimer("checkEndConditions", 3000);
 	if (tilesetType === "URBAN" || tilesetType === "ROCKIES")
 	{
 		setTimer("weatherCycle", 45000);

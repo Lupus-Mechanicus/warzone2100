@@ -47,8 +47,9 @@ void	avUpdateTiles()
 	MAPTILE *psTile;
 
 	/* Go through the tiles */
-	for (psTile = psMapTiles; i < len; i++)
+	for (; i < len; i++)
 	{
+		psTile = &psMapTiles[i];
 		maxLevel = psTile->illumination;
 
 		if (psTile->level > MIN_ILLUM || psTile->tileExploredBits & playermask)	// seen
@@ -67,16 +68,15 @@ void	avUpdateTiles()
 				psTile->level = MIN(psTile->level + increment, maxLevel);
 			}
 		}
-		psTile++;
 	}
 }
 
 // ------------------------------------------------------------------------------------
 UDWORD	avGetObjLightLevel(BASE_OBJECT *psObj, UDWORD origLevel)
 {
-	float div = (float)psObj->visible[selectedPlayer] / 255.f;
+	float div = (float)psObj->visibleForLocalDisplay() / 255.f;
 	unsigned int lowest = origLevel / START_DIVIDE;
-	unsigned int newLevel = div * origLevel;
+	unsigned int newLevel = static_cast<unsigned int>(div * origLevel);
 
 	if (newLevel < lowest)
 	{
@@ -109,7 +109,7 @@ void	preProcessVisibility()
 			MAPTILE *psTile = mapTile(i, j);
 			psTile->level = bRevealActive ? MIN(MIN_ILLUM, psTile->illumination / 4.0f) : 0;
 
-			if (TEST_TILE_VISIBLE(selectedPlayer, psTile))
+			if (TEST_TILE_VISIBLE_TO_SELECTEDPLAYER(psTile))
 			{
 				psTile->level = psTile->illumination;
 			}

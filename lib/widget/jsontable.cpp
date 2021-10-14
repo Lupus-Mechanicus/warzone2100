@@ -451,67 +451,6 @@ JSONTableWidget::~JSONTableWidget()
 	}
 }
 
-struct PopoverMenuButtonDisplayCache
-{
-	WzText text;
-};
-
-static void PopoverMenuButtonDisplayFunc(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
-{
-	// Any widget using PopoverMenuButtonDisplayFunc must have its pUserData initialized to a (PopoverMenuButtonDisplayCache*)
-	assert(psWidget->pUserData != nullptr);
-	PopoverMenuButtonDisplayCache& cache = *static_cast<PopoverMenuButtonDisplayCache*>(psWidget->pUserData);
-
-	W_BUTTON *psButton = dynamic_cast<W_BUTTON*>(psWidget);
-	ASSERT_OR_RETURN(, psButton, "psWidget is null");
-
-	int x0 = psButton->x() + xOffset;
-	int y0 = psButton->y() + yOffset;
-
-	bool haveText = !psButton->pText.isEmpty();
-
-	bool isDown = (psButton->getState() & (WBUT_DOWN | WBUT_LOCK | WBUT_CLICKLOCK)) != 0;
-	bool isDisabled = (psButton->getState() & WBUT_DISABLE) != 0;
-	bool isHighlight = (psButton->getState() & WBUT_HIGHLIGHT) != 0;
-
-	// Display the button background
-	PIELIGHT backgroundColor;
-	backgroundColor.rgba = 0;
-	if (isDown)
-	{
-		backgroundColor = pal_RGBA(10, 0, 70, 250); //WZCOL_FORM_DARK;
-	}
-	else if (isHighlight)
-	{
-		backgroundColor = pal_RGBA(25, 0, 110, 220); //WZCOL_TEXT_MEDIUM;
-	}
-	if (backgroundColor.rgba != 0)
-	{
-		// Draw the background
-		pie_UniTransBoxFill(x0, y0, x0 + psButton->width(), y0 + psButton->height(), backgroundColor);
-	}
-
-	if (haveText)
-	{
-		cache.text.setText(psButton->pText.toUtf8(), psButton->FontID);
-		int fx = x0 + JSON_ACTION_BUTTONS_PADDING;
-		int fy = y0 + (psButton->height() - cache.text.lineSize()) / 2 - cache.text.aboveBase();
-		PIELIGHT textColor = WZCOL_FORM_TEXT;
-		if (isDisabled)
-		{
-			cache.text.render(fx + 1, fy + 1, WZCOL_FORM_LIGHT);
-			textColor = WZCOL_FORM_DISABLE;
-		}
-		cache.text.render(fx, fy, textColor);
-	}
-
-	if (isDisabled)
-	{
-		// disabled, render something over it!
-		iV_TransBoxFill(x0, y0, x0 + psButton->width(), y0 + psButton->height());
-	}
-}
-
 std::shared_ptr<WIDGET> JSONTableWidget::createOptionsPopoverForm()
 {
 	// create all the buttons / option rows
@@ -589,29 +528,6 @@ std::shared_ptr<WIDGET> JSONTableWidget::createOptionsPopoverForm()
 	return itemsList;
 }
 
-static void displayChildDropShadows(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
-{
-	PIELIGHT dropShadowColor = pal_RGBA(0, 0, 0, 40);
-	const int widerPadding = 4;
-	const int closerPadding = 2;
-	int childXOffset = psWidget->x() + xOffset;
-	int childYOffset = psWidget->y() + yOffset;
-	for (auto& child : psWidget->children())
-	{
-		if (!child->visible()) { continue; }
-		int childX0 = child->x() + childXOffset;
-		int childY0 = child->y() + childYOffset;
-		int childDropshadowWiderX0 = std::max(childX0 - widerPadding, 0);
-		int childDropshadowWiderX1 = std::min(childX0 + child->width() + widerPadding, pie_GetVideoBufferWidth());
-		int childDropshadowWiderY1 = std::min(childY0 + child->height() + widerPadding, pie_GetVideoBufferHeight());
-		int childDropshadowCloserX0 = std::max(childX0 - closerPadding, 0);
-		int childDropshadowCloserX1 = std::min(childX0 + child->width() + closerPadding, pie_GetVideoBufferWidth());
-		int childDropshadowCloserY1 = std::min(childY0 + child->height() + closerPadding, pie_GetVideoBufferHeight());
-		pie_UniTransBoxFill(childDropshadowWiderX0, childY0, childDropshadowWiderX1, childDropshadowWiderY1, dropShadowColor);
-		pie_UniTransBoxFill(childDropshadowCloserX0, childY0, childDropshadowCloserX1, childDropshadowCloserY1, dropShadowColor);
-	}
-}
-
 void JSONTableWidget::displayOptionsOverlay(const std::shared_ptr<WIDGET>& psParent)
 {
 	auto lockedScreen = screenPointer.lock();
@@ -643,20 +559,20 @@ void JSONTableWidget::displayOptionsOverlay(const std::shared_ptr<WIDGET>& psPar
 
 	// Position the pop-over form
 	std::weak_ptr<WIDGET> weakParent = psParent;
-	optionsPopOver->setCalcLayout([weakParent](WIDGET *psWidget, unsigned int, unsigned int, unsigned int newScreenWidth, unsigned int newScreenHeight){
+	optionsPopOver->setCalcLayout([weakParent](WIDGET *psWidget) {
 		auto psParent = weakParent.lock();
 		ASSERT_OR_RETURN(, psParent != nullptr, "parent is null");
 		// (Ideally, with its left aligned with the left side of the "parent" widget, but ensure full visibility on-screen)
 		int popOverX0 = psParent->screenPosX();
-		if (popOverX0 + psWidget->width() > newScreenWidth)
+		if (popOverX0 + psWidget->width() > screenWidth)
 		{
-			popOverX0 = newScreenWidth - psWidget->width();
+			popOverX0 = screenWidth - psWidget->width();
 		}
 		// (Ideally, with its top aligned with the bottom of the "parent" widget, but ensure full visibility on-screen)
 		int popOverY0 = psParent->screenPosY() + psParent->height();
-		if (popOverY0 + psWidget->height() > newScreenHeight)
+		if (popOverY0 + psWidget->height() > screenHeight)
 		{
-			popOverY0 = newScreenHeight - psWidget->height();
+			popOverY0 = screenHeight - psWidget->height();
 		}
 		psWidget->move(popOverX0, popOverY0);
 	});

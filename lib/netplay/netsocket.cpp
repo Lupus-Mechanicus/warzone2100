@@ -36,6 +36,10 @@
 #endif
 #include <zlib.h>
 
+#if defined(__clang__)
+	#pragma clang diagnostic ignored "-Wshorten-64-to-32" // FIXME!!
+#endif
+
 enum
 {
 	SOCK_CONNECTION,
@@ -1014,7 +1018,7 @@ ssize_t readAll(Socket *sock, void *buf, size_t size, unsigned int timeout)
 
 	if (sock->fd[SOCK_CONNECTION] == INVALID_SOCKET)
 	{
-		debug(LOG_ERROR, "Invalid socket (%p), sock->fd[SOCK_CONNECTION]=%x  (error: EBADF)", static_cast<void *>(sock), sock->fd[SOCK_CONNECTION]);
+		debug(LOG_ERROR, "Invalid socket (%p), sock->fd[SOCK_CONNECTION]=%" PRIuPTR"x  (error: EBADF)", static_cast<void *>(sock), static_cast<uintptr_t>(sock->fd[SOCK_CONNECTION]));
 		setSockErr(EBADF);
 		return SOCKET_ERROR;
 	}
@@ -1044,7 +1048,7 @@ ssize_t readAll(Socket *sock, void *buf, size_t size, unsigned int timeout)
 		sock->ready = false;
 		if (ret == 0)
 		{
-			debug(LOG_NET, "Socket %x disconnected.", sock->fd[SOCK_CONNECTION]);
+			debug(LOG_NET, "Socket %" PRIuPTR"x disconnected.", static_cast<uintptr_t>(sock->fd[SOCK_CONNECTION]));
 			sock->readDisconnected = true;
 			setSockErr(ECONNRESET);
 			return received;

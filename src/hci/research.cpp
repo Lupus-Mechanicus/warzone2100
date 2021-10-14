@@ -112,6 +112,8 @@ void ResearchController::startResearch(RESEARCH &research)
 {
 	triggerEvent(TRIGGER_MENU_RESEARCH_SELECTED);
 
+	ASSERT_OR_RETURN(, selectedPlayer < MAX_PLAYERS, "invalid player: %" PRIu32 "", selectedPlayer);
+
 	auto facility = getHighlightedObject();
 
 	ASSERT_NOT_NULLPTR_OR_RETURN(, facility);
@@ -270,7 +272,13 @@ protected:
 		updateLayout();
 		auto facility = controller->getObjectAt(objectIndex);
 		ASSERT_NOT_NULLPTR_OR_RETURN(, facility);
-		ASSERT_OR_RETURN(, !isDead(facility), "Facility is dead");
+		if (isDead(facility))
+		{
+			ASSERT_FAILURE(!isDead(facility), "!isDead(facility)", AT_MACRO, __FUNCTION__, "Facility is dead");
+			// ensure the backing information is refreshed before the next draw
+			intRefreshScreen();
+			return;
+		}
 		displayIMD(Image(), ImdObject::Structure(facility), xOffset, yOffset);
 		displayIfHighlight(xOffset, yOffset);
 	}
@@ -393,6 +401,7 @@ private:
 			return;
 		}
 
+		ASSERT_OR_RETURN(, selectedPlayer < MAX_PLAYERS, "invalid player: %" PRIu32 "", selectedPlayer);
 		auto& playerResList = asPlayerResList[selectedPlayer];
 		ASSERT_OR_RETURN(, research->psSubject->index < playerResList.size(), "Invalid index");
 		auto currentPoints = playerResList[research->psSubject->index].currentPoints;
