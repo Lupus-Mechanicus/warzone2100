@@ -1978,7 +1978,7 @@ public:
 		char text[80];
 
 		drawBlueBox(x0, y0, width(), height());
-		ssprintf(text, _("Click to take player slot %" PRIu32 ""), NetPlay.players[targetPlayerIdx].position);
+		ssprintf(text, _("Click to take player slot %u"), static_cast<unsigned>(NetPlay.players[targetPlayerIdx].position));
 		cache.wzPositionText.setText(text, font_regular);
 		cache.wzPositionText.render(x0 + 10, y0 + 22, WZCOL_FORM_TEXT);
 	}
@@ -2212,11 +2212,15 @@ void WzMultiplayerOptionsTitleUI::openTeamChooser(uint32_t player)
 
 	UDWORD i;
 	int disallow = allPlayersOnSameTeam(player);
+	SpectatorInfo currSpectatorInfo = NETGameGetSpectatorInfo();
 
 	bool isSpectator = NetPlay.players[player].isSpectator;
-	bool canChangeTeams = !locked.teams && !isSpectator;
+	bool canChangeTeams = !locked.teams && !isSpectator && alliancesSetTeamsBeforeGame(game.alliance);
 	bool canKickPlayer = player != selectedPlayer && NetPlay.bComms && NetPlay.isHost && NetPlay.players[player].allocated;
 	bool canChangeSpectatorStatus = !locked.spectators && NetPlay.bComms && isHumanPlayer(player) && (player != NetPlay.hostPlayer) && (NetPlay.isHost || player == selectedPlayer);
+	bool displayMoveToSpectatorsButton = canChangeSpectatorStatus && !isSpectator && (currSpectatorInfo.availableSpectatorSlots() > 0 || (NetPlay.isHost && NETcanOpenNewSpectatorSlot()));
+	bool displayMoveToPlayersButton = canChangeSpectatorStatus && isSpectator;
+	canChangeSpectatorStatus = canChangeSpectatorStatus && (displayMoveToSpectatorsButton || displayMoveToPlayersButton);
 
 	if (!canChangeTeams && !canKickPlayer && !canChangeSpectatorStatus)
 	{
@@ -2315,8 +2319,7 @@ void WzMultiplayerOptionsTitleUI::openTeamChooser(uint32_t player)
 	if (canChangeSpectatorStatus)
 	{
 		// Add a "make spectator" button (if there are available spectator slots, and this is a player)
-		SpectatorInfo currSpectatorInfo = NETGameGetSpectatorInfo();
-		if (!isSpectator && (currSpectatorInfo.availableSpectatorSlots() > 0 || (NetPlay.isHost && NETcanOpenNewSpectatorSlot())))
+		if (displayMoveToSpectatorsButton)
 		{
 			const int imgwidth_spec = iV_GetImageWidth(FrontImages, IMAGE_SPECTATOR);
 			const int imgheight_spec = iV_GetImageHeight(FrontImages, IMAGE_SPECTATOR);
@@ -2363,7 +2366,7 @@ void WzMultiplayerOptionsTitleUI::openTeamChooser(uint32_t player)
 			addMultiButWithClickHandler(psInlineChooserForm, MULTIOP_TEAMCHOOSER_SPECTATOR, kickImageX - imgwidth_spec - 4, 6, imgwidth_spec, imgheight_spec,
 			_("Move to Spectators"), IMAGE_SPECTATOR, IMAGE_SPECTATOR_HI, IMAGE_SPECTATOR_HI, onSpecClickHandler);
 		}
-		else if (isSpectator)
+		else if (displayMoveToPlayersButton)
 		{
 			const int imgwidth_spec = iV_GetImageWidth(FrontImages, IMAGE_EDIT_PLAYER);
 			const int imgheight_spec = iV_GetImageHeight(FrontImages, IMAGE_EDIT_PLAYER);
@@ -2615,6 +2618,11 @@ bool recvTeamRequest(NETQUEUE queue)
 	}
 
 	if (locked.teams)
+	{
+		return false;
+	}
+
+	if (!alliancesSetTeamsBeforeGame(game.alliance))
 	{
 		return false;
 	}
@@ -4197,7 +4205,8 @@ public:
 		}
 
 		// hide team button if needed
-		if (!alliancesSetTeamsBeforeGame(game.alliance) && !NetPlay.players[playerIdx].isSpectator)
+		bool trueMultiplayerMode = (bMultiPlayer && NetPlay.bComms) || (!NetPlay.isHost && ingame.localJoiningInProgress);
+		if (!alliancesSetTeamsBeforeGame(game.alliance) && !NetPlay.players[playerIdx].isSpectator && !trueMultiplayerMode)
 		{
 			teamButton->hide();
 		}
@@ -5863,10 +5872,6 @@ void WzMultiplayerOptionsTitleUI::processMultiopWidgets(UDWORD id)
 				NETregisterServer(WZ_SERVER_UPDATE);
 			}
 			break;
-
-		case MULTIOP_MAP_PREVIEW:
-			loadMapPreview(true);
-			break;
 		}
 	}
 
@@ -6122,6 +6127,7 @@ void startMultiplayerGame()
 		sendOptions();
 		NEThaltJoining();							// stop new players entering.
 		ingame.TimeEveryoneIsInGame = nullopt;
+		ingame.endTime = nullopt;
 		ingame.isAllPlayersDataOK = false;
 		memset(&ingame.DataIntegrity, 0x0, sizeof(ingame.DataIntegrity));	//clear all player's array
 		SendFireUp();								//bcast a fireup message
@@ -6387,7 +6393,19 @@ void WzMultiplayerOptionsTitleUI::frontendMultiMessages(bool running)
 
 		case NET_OPTIONS:					// incoming options file.
 		{
-			recvOptions(queue);
+			if (NetPlay.hostPlayer != queue.index)
+			{
+				HandleBadParam("NET_OPTIONS should be sent by host", 255, queue.index);
+				ignoredMessage = true;
+				break;
+			}
+			if (!recvOptions(queue))
+			{
+				// supplied NET_OPTIONS are not valid
+				setLobbyError(ERROR_INVALID);
+				stopJoining(std::make_shared<WzMsgBoxTitleUI>(WzString(_("Host supplied invalid options")), parent));
+				break;
+			}
 			bInActualHostedLobby = true;
 			ingame.localOptionsReceived = true;
 
@@ -6564,6 +6582,7 @@ void WzMultiplayerOptionsTitleUI::frontendMultiMessages(bool running)
 
 				debug(LOG_NET, "& local Options Received (MP game)");
 				ingame.TimeEveryoneIsInGame = nullopt;			// reset time
+				ingame.endTime = nullopt;
 				resetDataHash();
 				decideWRF();
 
@@ -7167,8 +7186,15 @@ void displayTeamChooser(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
 
 	if (!NetPlay.players[i].isSpectator)
 	{
-		ASSERT_OR_RETURN(, NetPlay.players[i].team >= 0 && NetPlay.players[i].team < MAX_PLAYERS, "Team index out of bounds");
-		iV_DrawImage(FrontImages, IMAGE_TEAM0 + NetPlay.players[i].team, x + 2, y + 8);
+		if (alliancesSetTeamsBeforeGame(game.alliance))
+		{
+			ASSERT_OR_RETURN(, NetPlay.players[i].team >= 0 && NetPlay.players[i].team < MAX_PLAYERS, "Team index out of bounds");
+			iV_DrawImage(FrontImages, IMAGE_TEAM0 + NetPlay.players[i].team, x + 2, y + 8);
+		}
+		else
+		{
+			// TODO: Maybe display something else here to signify "no team, FFA"
+		}
 	}
 	else
 	{
@@ -7901,6 +7927,7 @@ inline void to_json(nlohmann::json& j, const MULTIPLAYERGAME& p) {
 	j["isMapMod"] = p.isMapMod;
 	j["isRandom"] = p.isRandom;
 	j["techLevel"] = p.techLevel;
+	j["inactivityMinutes"] = p.inactivityMinutes;
 }
 
 inline void from_json(const nlohmann::json& j, MULTIPLAYERGAME& p) {
@@ -7920,6 +7947,15 @@ inline void from_json(const nlohmann::json& j, MULTIPLAYERGAME& p) {
 	p.isMapMod = j.at("isMapMod").get<bool>();
 	p.isRandom = j.at("isRandom").get<bool>();
 	p.techLevel = j.at("techLevel").get<uint32_t>();
+	if (j.contains("inactivityMinutes"))
+	{
+		p.inactivityMinutes = j.at("inactivityMinutes").get<uint32_t>();
+	}
+	else
+	{
+		// default to the old (4.2.0 beta-era) value of 4 minutes
+		p.inactivityMinutes = 4;
+	}
 }
 
 inline void to_json(nlohmann::json& j, const MULTISTRUCTLIMITS& p) {
@@ -7953,7 +7989,7 @@ inline void to_json(nlohmann::json& j, const MULTIPLAYERINGAME& p) {
 //	}
 //	j["JoiningInProgress"] = joiningInProgress;
 	j["side"] = p.side;
-	j["structureLimits"] = p.structureLimits;
+	j["structureLimits"] = p.lastAppliedStructureLimits; // See applyLimitSet() for why we save `lastAppliedStructureLimits` as `structureLimits`
 	j["flags"] = p.flags;
 }
 
@@ -8093,7 +8129,7 @@ bool WZGameReplayOptionsHandler::saveOptions(nlohmann::json& object) const
 	return true;
 }
 
-bool WZGameReplayOptionsHandler::restoreOptions(const nlohmann::json& object)
+bool WZGameReplayOptionsHandler::restoreOptions(const nlohmann::json& object, uint32_t replay_netcodeMajor, uint32_t replay_netcodeMinor)
 {
 	// random seed
 	uint32_t rand_seed = object.at("randSeed").get<uint32_t>();
@@ -8102,18 +8138,34 @@ bool WZGameReplayOptionsHandler::restoreOptions(const nlohmann::json& object)
 	// compare version_string and throw a pop-up warning if not equal
 	auto replayVersionStr = object.at("versionString").get<std::string>();
 	auto expectedVersionStr = version_getVersionString();
-	if (replayVersionStr != expectedVersionStr)
+	bool nonMatchingVersionString = replayVersionStr != expectedVersionStr;
+	bool nonMatchingNetcodeVersion = !NETisCorrectVersion(replay_netcodeMajor, replay_netcodeMinor);
+	if (nonMatchingVersionString || nonMatchingNetcodeVersion)
 	{
+		if (nonMatchingVersionString)
+		{
+			debug(LOG_INFO, "Version string mismatch: (replay: %s) - (current: %s)", replayVersionStr.c_str(), expectedVersionStr);
+		}
 		std::string mismatchVersionDescription = _("The version of Warzone 2100 used to save this replay file does not match the currently-running version.");
 		mismatchVersionDescription += "\n\n";
 		mismatchVersionDescription += astringf(_("Replay File Saved With: \"%s\""), replayVersionStr.c_str());
 		mismatchVersionDescription += "\n";
-		mismatchVersionDescription += astringf(_("Current Warzone 2100 Version: \"%s\""), expectedVersionStr);
+		if (nonMatchingVersionString)
+		{
+			mismatchVersionDescription += astringf(_("Current Warzone 2100 Version: \"%s\""), expectedVersionStr);
+		}
+		else
+		{
+			// only a netcode mismatch - weird, but display the netcode version info
+			mismatchVersionDescription += astringf("Replay File NetcodeVer: (0x%" PRIx32 ", 0x%" PRIx32 ")", replay_netcodeMajor, replay_netcodeMinor);
+			mismatchVersionDescription += "\n";
+			mismatchVersionDescription += astringf("Current Warzone 2100 NetcodeVer: (0x%" PRIx32 ", 0x%" PRIx32 ")", NETGetMajorVersion(), NETGetMinorVersion());
+		}
 		mismatchVersionDescription += "\n\n";
 		mismatchVersionDescription += _("Replays should usually be played back with the same version used to save the replay.");
 		mismatchVersionDescription += "\n";
 		mismatchVersionDescription += _("The replay may not playback successfully, or there may be differences in the simulation.");
-		wzDisplayDialog(Dialog_Warning, _("Replay Version Mismatch"), mismatchVersionDescription.c_str());
+		wzDisplayDialog((nonMatchingVersionString) ? Dialog_Warning : Dialog_Error, _("Replay Version Mismatch"), mismatchVersionDescription.c_str());
 	}
 
 	// restore `game`
@@ -8210,6 +8262,7 @@ bool WZGameReplayOptionsHandler::restoreOptions(const nlohmann::json& object)
 
 	// Set various other initialization things (see NET_FIREUP)
 	ingame.TimeEveryoneIsInGame = nullopt;			// reset time
+	ingame.endTime = nullopt;
 	resetDataHash();
 	decideWRF();
 

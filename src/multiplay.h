@@ -72,6 +72,7 @@ struct MULTIPLAYERGAME
 	bool		isMapMod;					// if a map has mods
 	bool        isRandom;                   // If a map is non-static.
 	uint32_t	techLevel;					// what technology level is being used
+	uint32_t	inactivityMinutes;			// The number of minutes without active play before a player should be considered "inactive". (0 = disable activity alerts)
 
 	// NOTE: If adding to this struct, a lot of things probably require changing
 	// (send/recvOptions? to/from_json in multiint.h.cpp?)
@@ -105,6 +106,7 @@ struct MULTIPLAYERINGAME
 	optional<int32_t>	TimeEveryoneIsInGame;
 	bool				isAllPlayersDataOK;
 	std::chrono::steady_clock::time_point startTime;
+	optional<std::chrono::steady_clock::time_point> endTime;
 	std::chrono::steady_clock::time_point lastLagCheck;
 	optional<std::chrono::steady_clock::time_point> lastSentPlayerDataCheck2[MAX_CONNECTED_PLAYERS] = {};
 	std::chrono::steady_clock::time_point lastPlayerDataCheck2;
@@ -118,6 +120,7 @@ struct MULTIPLAYERINGAME
 #define MPFLAGS_FORCELIMITS	0x20  		///< Flag to force structure limits
 #define MPFLAGS_MAX		0x3f
 	SDWORD		skScores[MAX_PLAYERS][2];			// score+kills for local skirmish players.
+	std::vector<MULTISTRUCTLIMITS> lastAppliedStructureLimits;	// a bit of a hack to retain the structureLimits used when loading / starting a game
 };
 
 struct NetworkTextMessage
@@ -315,7 +318,7 @@ bool makePlayerSpectator(uint32_t player_id, bool removeAllStructs = false, bool
 class WZGameReplayOptionsHandler : public ReplayOptionsHandler
 {
 	virtual bool saveOptions(nlohmann::json& object) const override;
-	virtual bool restoreOptions(const nlohmann::json& object) override;
+	virtual bool restoreOptions(const nlohmann::json& object, uint32_t replay_netcodeMajor, uint32_t replay_netcodeMinor) override;
 };
 
 #endif // __INCLUDED_SRC_MULTIPLAY_H__

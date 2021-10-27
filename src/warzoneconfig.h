@@ -34,6 +34,8 @@
 #define	CAMERASPEED_DEFAULT	(2500)
 #define	CAMERASPEED_STEP	(100)
 
+#define MIN_MPINACTIVITY_MINUTES 4
+
 /***************************************************************************/
 /*
  *	Global Definitions
@@ -118,6 +120,8 @@ int war_getAutoLagKickSeconds();
 void war_setAutoLagKickSeconds(int seconds);
 bool war_getDisableReplayRecording();
 void war_setDisableReplayRecording(bool disable);
+uint32_t war_getMPInactivityMinutes();
+void war_setMPInactivityMinutes(uint32_t minutes);
 
 /**
  * Enable or disable sound initialization

@@ -200,7 +200,7 @@ void incrementViewDistance(float amount)
 	auto target = (viewDistanceAnimation.isActive() ? viewDistanceAnimation.getFinalData() : getViewDistance()) + amount;
 	if (!dbgInputManager.debugMappingsAllowed())
 	{
-		CLIP(target, MINDISTANCE, MAXDISTANCE);
+		CLIP(target, MINDISTANCE, (!NETisReplay()) ? MAXDISTANCE : MAXDISTANCE_REPLAY);
 	}
 
 	animateToViewDistance(target);
@@ -1390,7 +1390,6 @@ void startDeliveryPosition(FLAG_POSITION *psFlag)
 void finishDeliveryPosition()
 {
 	STRUCTURE *psStruct = nullptr;
-	FLAG_POSITION *psFlagPos;
 
 	ASSERT_OR_RETURN(, selectedPlayer < MAX_PLAYERS, "Invalid player (selectedPlayer: %" PRIu32 ")", selectedPlayer);
 
@@ -1398,19 +1397,22 @@ void finishDeliveryPosition()
 	{
 		flagReposVarsValid = false;
 		psStruct = IdToStruct(flagStructId, selectedPlayer);
-		if (StructIsFactory(psStruct) && psStruct->pFunctionality
-		    && psStruct->pFunctionality->factory.psAssemblyPoint)
+		if (psStruct)
 		{
-			setAssemblyPoint(psStruct->pFunctionality->factory.psAssemblyPoint,
-			                 flagPos.coords.x, flagPos.coords.y, selectedPlayer, true);
-		}
-		else if (psStruct->pStructureType->type == REF_REPAIR_FACILITY && psStruct->pFunctionality != nullptr)
-		{
-			setAssemblyPoint(psStruct->pFunctionality->repairFacility.psDeliveryPoint,
-			                 flagPos.coords.x, flagPos.coords.y, selectedPlayer, true);
+			if (StructIsFactory(psStruct) && psStruct->pFunctionality
+				&& psStruct->pFunctionality->factory.psAssemblyPoint)
+			{
+				setAssemblyPoint(psStruct->pFunctionality->factory.psAssemblyPoint,
+								 flagPos.coords.x, flagPos.coords.y, selectedPlayer, true);
+			}
+			else if (psStruct->pStructureType && psStruct->pStructureType->type == REF_REPAIR_FACILITY && psStruct->pFunctionality != nullptr)
+			{
+				setAssemblyPoint(psStruct->pFunctionality->repairFacility.psDeliveryPoint,
+								 flagPos.coords.x, flagPos.coords.y, selectedPlayer, true);
+			}
 		}
 		//deselect once moved
-		for (psFlagPos = apsFlagPosLists[selectedPlayer]; psFlagPos; psFlagPos = psFlagPos->psNext)
+		for (FLAG_POSITION *psFlagPos = apsFlagPosLists[selectedPlayer]; psFlagPos; psFlagPos = psFlagPos->psNext)
 		{
 			psFlagPos->selected = false;
 		}

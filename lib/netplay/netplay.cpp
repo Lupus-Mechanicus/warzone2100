@@ -312,12 +312,12 @@ bool NETisGreaterVersion(uint32_t game_version_major, uint32_t game_version_mino
 	return (game_version_major > NETCODE_VERSION_MAJOR) || ((game_version_major == NETCODE_VERSION_MAJOR) && (game_version_minor > NETCODE_VERSION_MINOR));
 }
 
-int NETGetMajorVersion()
+uint32_t NETGetMajorVersion()
 {
 	return NETCODE_VERSION_MAJOR;
 }
 
-int NETGetMinorVersion()
+uint32_t NETGetMinorVersion()
 {
 	return NETCODE_VERSION_MINOR;
 }
@@ -584,7 +584,10 @@ void NET_InitPlayers(bool initTeams, bool initSpectator)
 
 static void NETSendNPlayerInfoTo(uint32_t *index, uint32_t indexLen, unsigned to)
 {
-	ASSERT_HOST_ONLY(return);
+	if (NetPlay.bComms && ingame.localJoiningInProgress)
+	{
+		ASSERT_HOST_ONLY(return);
+	}
 	NETbeginEncode(NETnetQueue(to), NET_PLAYER_INFO);
 	NETuint32_t(&indexLen);
 	for (unsigned n = 0; n < indexLen; ++n)
@@ -4275,7 +4278,7 @@ bool NETfindGames(std::vector<GAMESTRUCT>& results, size_t startingIndex, size_t
 			// stop processing games
 			return false;
 		}
-		if ((onlyMatchingLocalVersion) && ((lobbyGame.game_version_major != (unsigned)NETGetMajorVersion()) || (lobbyGame.game_version_minor != (unsigned)NETGetMinorVersion())))
+		if (onlyMatchingLocalVersion && !NETisCorrectVersion(lobbyGame.game_version_major, lobbyGame.game_version_minor))
 		{
 			// skip this non-matching version, continue
 			return true;
@@ -4393,6 +4396,7 @@ bool NETjoinGame(const char *host, uint32_t port, const char *playername, bool a
 	}
 
 	// Allocate memory for a new socket
+	NetPlay.hostPlayer = NET_HOST_ONLY;
 	NETinitQueue(NETnetQueue(NET_HOST_ONLY));
 	// NOTE: tcp_socket = bsocket now!
 	bsocket = tcp_socket;

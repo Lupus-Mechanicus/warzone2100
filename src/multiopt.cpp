@@ -63,11 +63,13 @@
 #include "multirecv.h"
 #include "template.h"
 #include "activity.h"
+#include "warzoneconfig.h"
 
 // send complete game info set!
 void sendOptions()
 {
 	ASSERT_HOST_ONLY(return);
+	ASSERT_OR_RETURN(, GetGameMode() != GS_NORMAL, "sendOptions shouldn't be called after the game has started");
 
 	game.modHashes = getModHashList();
 
@@ -91,6 +93,12 @@ void sendOptions()
 	NETuint8_t(&game.scavengers);
 	NETbool(&game.isMapMod);
 	NETuint32_t(&game.techLevel);
+	if (game.inactivityMinutes > 0 && game.inactivityMinutes < MIN_MPINACTIVITY_MINUTES)
+	{
+		debug(LOG_ERROR, "Invalid inactivityMinutes value specified: %" PRIu32 "; resetting to: %" PRIu32, game.inactivityMinutes, static_cast<uint32_t>(MIN_MPINACTIVITY_MINUTES));
+		game.inactivityMinutes = MIN_MPINACTIVITY_MINUTES;
+	}
+	NETuint32_t(&game.inactivityMinutes);
 
 	for (unsigned i = 0; i < MAX_PLAYERS; i++)
 	{
@@ -132,9 +140,11 @@ void sendOptions()
 
 // ////////////////////////////////////////////////////////////////////////////
 // options for a game. (usually recvd in frontend)
-void recvOptions(NETQUEUE queue)
+// returns: false if the options should be considered invalid and the client should disconnect
+bool recvOptions(NETQUEUE queue)
 {
-	ASSERT_OR_RETURN(, queue.index == NetPlay.hostPlayer, "NET_OPTIONS received from unexpected player: %" PRIu8 " - ignoring", queue.index);
+	ASSERT_OR_RETURN(true /* silently ignore */, queue.index == NetPlay.hostPlayer, "NET_OPTIONS received from unexpected player: %" PRIu8 " - ignoring", queue.index);
+	ASSERT_OR_RETURN(false, GetGameMode() != GS_NORMAL, "NET_OPTIONS received after the game has started??");
 
 	unsigned int i;
 
@@ -150,7 +160,7 @@ void recvOptions(NETQUEUE queue)
 	NETbin(game.hash.bytes, game.hash.Bytes);
 	uint32_t modHashesSize;
 	NETuint32_t(&modHashesSize);
-	ASSERT_OR_RETURN(, modHashesSize < 1000000, "Way too many mods %u", modHashesSize);
+	ASSERT_OR_RETURN(false, modHashesSize < 1000000, "Way too many mods %u", modHashesSize);
 	game.modHashes.resize(modHashesSize);
 	for (auto &hash : game.modHashes)
 	{
@@ -164,6 +174,12 @@ void recvOptions(NETQUEUE queue)
 	NETuint8_t(&game.scavengers);
 	NETbool(&game.isMapMod);
 	NETuint32_t(&game.techLevel);
+	NETuint32_t(&game.inactivityMinutes);
+	if (game.inactivityMinutes > 0 && game.inactivityMinutes < MIN_MPINACTIVITY_MINUTES)
+	{
+		debug(LOG_ERROR, "Invalid inactivityMinutes value specified: %" PRIu32, game.inactivityMinutes);
+		return false;
+	}
 
 	for (i = 0; i < MAX_PLAYERS; i++)
 	{
@@ -292,13 +308,11 @@ void recvOptions(NETQUEUE queue)
 				break;
 			case FileRequestResult::FileExists:
 				debug(LOG_FATAL, "Can't load map %s, even though we downloaded %s", game.map, filename);
-				abort();
-				break;
+				return false;
 			case FileRequestResult::FailedToOpenFileForWriting:
 				// TODO: How best to handle? Ideally, message + back out of lobby?
 				debug(LOG_FATAL, "Failed to open file for writing - unable to download file: %s", filename);
-				abort();
-				break;
+				return false;
 		}
 	}
 
@@ -323,8 +337,7 @@ void recvOptions(NETQUEUE queue)
 			case FileRequestResult::FailedToOpenFileForWriting:
 				// TODO: How best to handle? Ideally, message + back out of lobby?
 				debug(LOG_FATAL, "Failed to open file for writing - unable to download file: %s", filename);
-				abort();
-				break;
+				return false;
 		}
 	}
 
@@ -344,6 +357,8 @@ void recvOptions(NETQUEUE queue)
 	}
 
 	ActivityManager::instance().updateMultiplayGameData(game, ingame, NETGameIsLocked());
+
+	return true;
 }
 
 
@@ -453,6 +468,7 @@ static bool gameInit()
 	{
 		playerCount += NetPlay.players[index].ai >= 0 || NetPlay.players[index].allocated;
 	}
+	debug(LOG_NET, "Player count: %u", playerCount);
 
 	playerResponding();			// say howdy!
 
@@ -525,6 +541,7 @@ bool multiGameShutdown()
 	ingame.side = InGameSide::MULTIPLAYER_CLIENT;
 	ingame.TimeEveryoneIsInGame = nullopt;
 	ingame.startTime = std::chrono::steady_clock::time_point();
+	ingame.endTime = nullopt;
 	ingame.lastLagCheck = std::chrono::steady_clock::time_point();
 	ingame.lastPlayerDataCheck2 = std::chrono::steady_clock::time_point();
 	NetPlay.isHost					= false;

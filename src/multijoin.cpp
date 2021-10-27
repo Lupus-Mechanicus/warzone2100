@@ -409,6 +409,7 @@ bool MultiPlayerJoin(UDWORD playerIndex)
 			return true;
 		}
 		ASSERT(NetPlay.playercount <= MAX_PLAYERS, "Too many players!");
+		ASSERT(GetGameMode() != GS_NORMAL, "A player joined after the game started??");
 
 		// setup data for this player, then broadcast it to the other players.
 		setupNewPlayer(playerIndex);						// setup all the guff for that player.
@@ -501,8 +502,7 @@ bool recvDataCheck(NETQUEUE queue)
 			addConsoleMessage(msg, LEFT_JUSTIFY, NOTIFY_MESSAGE);
 
 			kickPlayer(player, _("Your data doesn't match the host's!"), ERROR_WRONGDATA);
-			debug(LOG_WARNING, "%s (%u) has an incompatible mod. ([%d] got %x, expected %x)", getPlayerName(player), player, i, tempBuffer[i], DataHash[i]);
-			debug(LOG_POPUP, "%s (%u), has an incompatible mod. ([%d] got %x, expected %x)", getPlayerName(player), player, i, tempBuffer[i], DataHash[i]);
+			debug(LOG_ERROR, "%s (%u) has an incompatible mod. ([%d] got %x, expected %x)", getPlayerName(player), player, i, tempBuffer[i], DataHash[i]);
 
 			return false;
 		}

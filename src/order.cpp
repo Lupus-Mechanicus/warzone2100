@@ -877,9 +877,9 @@ void orderUpdateDroid(DROID *psDroid)
 			}
 			else
 			{
-				// move the droid closer to the repair facility
-				actionDroid(psDroid, DACTION_MOVE, psDroid->order.psObj->pos.x, psDroid->order.psObj->pos.y);
-				
+				// move the droid closer to the repair point
+				// setting target to null will trigger search for nearest repair point: we might have a better option after all
+				psDroid->order.psObj = nullptr;
 			}
 		}
 		break;
@@ -1177,7 +1177,7 @@ static void orderCmdGroupBase(DROID_GROUP *psGroup, DROID_ORDER_DATA *psData)
 					// there is no point in ordering AA gun to attack ground units
 					for (int i = 0; i < MAX_WEAPONS; i++)
 					{
-						
+
 						if (validTarget(psCurr, psData->psObj, i))
 						{
 							orderDroidBase(psCurr, psData);
@@ -1587,7 +1587,7 @@ void orderDroidBase(DROID *psDroid, DROID_ORDER_DATA *psOrder)
 			{
 				rtrData = RtrBestResult(psOrder);
 			}
-					
+
 			/* give repair order if repair facility found */
 			if (rtrData.type == RTR_TYPE_REPAIR_FACILITY)
 			{
@@ -1616,7 +1616,7 @@ void orderDroidBase(DROID *psDroid, DROID_ORDER_DATA *psOrder)
 				psDroid->order = DroidOrder(psOrder->type, Vector2i(rtrData.psObj->pos.x, rtrData.psObj->pos.y), RTR_TYPE_DROID);
 				psDroid->order.pos = rtrData.psObj->pos.xy();
 				psDroid->order.psObj = rtrData.psObj;
-				objTrace(psDroid->id, "Go to repair droid at (%d, %d) using (%d, %d)!", rtrData.psObj->pos.x, rtrData.psObj->pos.y, psDroid->order.pos.x, psDroid->order.pos.y);
+				objTrace(psDroid->id, "Go to repair at (%d, %d) using (%d, %d), time %i!", rtrData.psObj->pos.x, rtrData.psObj->pos.y, psDroid->order.pos.x, psDroid->order.pos.y, gameTime);
 				actionDroid(psDroid, DACTION_MOVE, psDroid->order.pos.x, psDroid->order.pos.y);
 			}
 			else
@@ -2503,6 +2503,7 @@ DroidOrder chooseOrderObj(DROID *psDroid, BASE_OBJECT *psObj, bool altOrder)
 			if (validTarget(psDroid, psObj, i))
 			{
 				order = DroidOrder(DORDER_ATTACK, psObj);
+				break;
 			}
 		}
 	}
@@ -3142,13 +3143,13 @@ void secondaryCheckDamageLevel(DROID *psDroid)
 					ASSERT(result.psObj != nullptr, "RTR_DROID but target is null");
 					orderDroidObj(psDroid, DORDER_RTR, result.psObj, ModeImmediate);
 				}
-				
+
 			}
 		}
 	}
 }
 // balance the load at random
-// always prefer faster repairs 
+// always prefer faster repairs
 static inline RtrBestResult decideWhereToRepairAndBalance(DROID *psDroid)
 {
 	int bestDistToRepairFac = INT32_MAX, bestDistToRepairDroid = INT32_MAX;
@@ -3189,7 +3190,7 @@ static inline RtrBestResult decideWhereToRepairAndBalance(DROID *psDroid)
 			if (bestDistToRepairFac > thisDistToRepair)
 			{
 				bestDistToRepairFac = thisDistToRepair;
-				bestFacPos = psStruct->pos;			
+				bestFacPos = psStruct->pos;
 			}
 		}
 	}
@@ -3212,7 +3213,7 @@ static inline RtrBestResult decideWhereToRepairAndBalance(DROID *psDroid)
 				bestDistToRepairDroid = thisDistToRepair;
 				bestDroidPos = psCurr->pos;
 			}
-		} 
+		}
 	}
 
 	ASSERT(bestDistToRepairFac > 0, "Bad distance to repair facility");
@@ -3245,7 +3246,7 @@ static inline RtrBestResult decideWhereToRepairAndBalance(DROID *psDroid)
 	if (vFacilityCloseEnough.size() == 1)
 	{
 		return RtrBestResult(RTR_TYPE_REPAIR_FACILITY, vFacility[vFacilityCloseEnough[0]]);
-		
+
 	} else if (vFacilityCloseEnough.size() > 1)
 	{
 		int32_t which = gameRand(vFacilityCloseEnough.size());

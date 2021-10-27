@@ -254,18 +254,25 @@ bool NETreplayLoadStart(std::string const &filename, ReplayOptionsHandler& optio
 		uint32_t replayFormatVer = settings.at("replayFormatVer").get<uint32_t>();
 		if (replayFormatVer > currentReplayFormatVer)
 		{
-			return onFail("Replay format is newer than this version of Warzone 2100 can support");
+			std::string mismatchVersionDescription = _("The replay file format is newer than this version of Warzone 2100 can support.");
+			mismatchVersionDescription += "\n\n";
+			mismatchVersionDescription += astringf(_("Replay Format Version: %u"), static_cast<unsigned>(replayFormatVer));
+			wzDisplayDialog(Dialog_Error, _("Replay File Format Unsupported"), mismatchVersionDescription.c_str());
+
+			std::string failLogStr = "Replay file format is newer than this version of Warzone 2100 can support: " + std::to_string(replayFormatVer);
+			return onFail(failLogStr.c_str());
 		}
 
-		uint32_t major = settings.at("major").get<uint32_t>();
-		uint32_t minor = settings.at("minor").get<uint32_t>();
-		if (!NETisCorrectVersion(major, minor))
+		uint32_t replay_netcodeMajor = settings.at("major").get<uint32_t>();
+		uint32_t replay_netcodeMinor = settings.at("minor").get<uint32_t>();
+		if (!NETisCorrectVersion(replay_netcodeMajor, replay_netcodeMinor))
 		{
-			return onFail("wrong netcode version");
+			debug(LOG_INFO, "NetCode Version mismatch: (replay file: 0x%" PRIx32 ", 0x%" PRIx32 ") - (current: 0x%" PRIx32 ", 0x%" PRIx32 ")", replay_netcodeMajor, replay_netcodeMinor, NETGetMajorVersion(), NETGetMinorVersion());
+			// do not immediately fail out - restoreOptions handles displaying a nicer warning popup
 		}
 
 		// Load game options using optionsHandler
-		if (!optionsHandler.restoreOptions(settings.at("gameOptions")))
+		if (!optionsHandler.restoreOptions(settings.at("gameOptions"), replay_netcodeMajor, replay_netcodeMinor))
 		{
 			return onFail("invalid options");
 		}

@@ -557,7 +557,7 @@ BASE_OBJECT *IdToPointer(UDWORD id, UDWORD player)
 // return a players name.
 const char *getPlayerName(int player)
 {
-	ASSERT_OR_RETURN(nullptr, player >= 0, "Wrong player index: %u", player);
+	ASSERT_OR_RETURN(nullptr, player >= 0, "Wrong player index: %d", player);
 
 	// playerName is created through setPlayerName()
 	if (player < MAX_PLAYERS && strcmp(playerName[player], "") != 0)
@@ -1236,9 +1236,6 @@ bool recvMessage()
 		{
 		case NET_PING:						// diagnostic ping msg.
 			recvPing(queue);
-			break;
-		case NET_OPTIONS:
-			recvOptions(queue);
 			break;
 		case NET_PLAYER_DROPPED:				// remote player got disconnected
 			{
@@ -2347,6 +2344,10 @@ bool makePlayerSpectator(uint32_t playerIndex, bool removeAllStructs, bool quiet
 		}
 	}
 
+	if (!NETisReplay() || playerIndex != realSelectedPlayer)
+	{
+		syncDebug("player%u", (unsigned)playerIndex);
+	}
 	NetPlay.players[playerIndex].isSpectator = true; // must come before enableGodMode
 
 	if (playerIndex == selectedPlayer)
