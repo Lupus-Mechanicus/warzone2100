@@ -25,6 +25,7 @@
 
 #include "lib/framework/wzglobal.h"
 #include "lib/framework/string_ext.h"
+#include "lib/gamelib/gtime.h"
 #include <string.h>
 
 #ifndef WZ_OS_WIN
@@ -358,6 +359,33 @@ NETQUEUE NETgameQueue(unsigned player)
 	return ret;
 }
 
+bool NETgameIsBehindPlayersByAtLeast(size_t numGameTimeUpdates /*= 2*/)
+{
+	// if we should be waited on, then there's no reason we should be behind other players
+	if (gtimeShouldWaitForPlayer(realSelectedPlayer))
+	{
+		return false;
+	}
+
+	unsigned begin = 0, end = MAX_CONNECTED_PLAYERS;
+
+	for (unsigned player = begin; player < end; ++player)
+	{
+		auto pPlayerGameQueue = gameQueues[player];
+		if (!pPlayerGameQueue)
+		{
+			continue;
+		}
+
+		if (gtimeShouldWaitForPlayer(player) && pPlayerGameQueue->numPendingGameTimeUpdateMessages() < numGameTimeUpdates)
+		{
+			return false;  // Do not have enough pending game time updates for this player
+		}
+	}
+
+	return true;  // Have enough pending game time updates from all players that should be waited on
+}
+
 NETQUEUE NETgameQueueForced(unsigned player)
 {
 	NETQUEUE ret;
@@ -524,7 +552,7 @@ bool NETend()
 		{
 			NETsend(queueInfo, &queue->getMessageForNet());
 			queue->popMessageForNet();
-			ASSERT(queue->numMessagesForNet() == 0, "Queue not empty.");
+			ASSERT(queue->numMessagesForNet() == 0, "Queue not empty (%u messages remaining). (message = type: %" PRIu8 ", size: %zu), (queue = index: %" PRIu8 "; queueType: %" PRIu8 "; exclude: %" PRIu8 "; isPair: %d)", queue->numMessagesForNet(), message.type, message.data.size(), queueInfo.index, queueInfo.queueType, queueInfo.exclude, (int)queueInfo.isPair);
 		}
 
 		// We have ended the serialisation, so mark the direction invalid
@@ -828,20 +856,34 @@ ReplayOptionsHandler::~ReplayOptionsHandler() { }
 // TODO Call this function somewhere.
 bool NETloadReplay(std::string const &filename, ReplayOptionsHandler& optionsHandler)
 {
-	if (!NETreplayLoadStart(filename, optionsHandler))
+	uint32_t replayFormatVer = 0;
+	if (!NETreplayLoadStart(filename, optionsHandler, replayFormatVer))
 	{
 		return false;
 	}
 	std::unique_ptr<NetMessage> newMessage;
 	uint8_t player;
+	bool gotReplayEnded = false;
 	while (NETreplayLoadNetMessage(newMessage, player))
 	{
 		if ((player >= MAX_PLAYERS && player != NetPlay.hostPlayer) || gameQueues[player] == nullptr)
 		{
-			debug(LOG_ERROR, "Skipping message to player %d in replay.", player);
+			debug((newMessage->type != GAME_GAME_TIME) ? LOG_ERROR : LOG_INFO, "Skipping message to player %d in replay.", player);
 			continue;
 		}
+		if (newMessage->type == REPLAY_ENDED)
+		{
+			gotReplayEnded = true;
+			break;
+		}
 		gameQueues[player]->pushMessage(*newMessage);
+	}
+	if (!gotReplayEnded && replayFormatVer >= 2)
+	{
+		debug(LOG_POPUP, _("Unable to load replay: The replay file is incomplete or corrupted."));
+		bIsReplay = true;
+		NETshutdownReplay();
+		return false;
 	}
 	// Add special REPLAY_ENDED message to the end of the host's gameQueue
 	newMessage = std::unique_ptr<NetMessage>(new NetMessage(REPLAY_ENDED));

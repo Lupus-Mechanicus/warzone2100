@@ -244,7 +244,7 @@ bool recvOptions(NETQUEUE queue)
 		FailedToOpenFileForWriting
 	};
 	auto requestFile = [](Sha256 &hash, char const *filename) -> FileRequestResult {
-		if (std::any_of(NetPlay.wzFiles.begin(), NetPlay.wzFiles.end(), [&hash](WZFile const &file) { return file.hash == hash; }))
+		if (std::any_of(NET_getDownloadingWzFiles().begin(), NET_getDownloadingWzFiles().end(), [&hash](WZFile const &file) { return file.hash == hash; }))
 		{
 			debug(LOG_INFO, "Already requested file, continue waiting.");
 			return FileRequestResult::DownloadInProgress;  // Downloading the file already
@@ -271,7 +271,7 @@ bool recvOptions(NETQUEUE queue)
 			return FileRequestResult::FailedToOpenFileForWriting;
 		}
 
-		NetPlay.wzFiles.emplace_back(pFileHandle, filename, hash);
+		NET_addDownloadingWZFile(WZFile(pFileHandle, filename, hash));
 
 		// Request the map/mod from the host
 		NETbeginEncode(NETnetQueue(NetPlay.hostPlayer), NET_FILE_REQUESTED);
@@ -301,7 +301,7 @@ bool recvOptions(NETQUEUE queue)
 		{
 			case FileRequestResult::StartingDownload:
 				debug(LOG_INFO, "Map was not found, requesting map %s from host, type %d", game.map, game.isMapMod);
-				addConsoleMessage("MAP REQUESTED!", DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
+				addConsoleMessage(_("MAP REQUESTED!"), DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
 				break;
 			case FileRequestResult::DownloadInProgress:
 				// do nothing - just wait
@@ -326,7 +326,7 @@ bool recvOptions(NETQUEUE queue)
 		{
 			case FileRequestResult::StartingDownload:
 				debug(LOG_INFO, "Mod was not found, requesting mod %s from host", hash.toString().c_str());
-				addConsoleMessage("MOD REQUESTED!", DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
+				addConsoleMessage(_("MOD REQUESTED!"), DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
 				break;
 			case FileRequestResult::DownloadInProgress:
 				// do nothing - just wait

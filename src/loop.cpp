@@ -118,7 +118,7 @@ struct PAUSE_STATE
 };
 static PAUSE_STATE pauseState;
 static size_t maxFastForwardTicks = WZ_DEFAULT_MAX_FASTFORWARD_TICKS;
-static bool fastForwardTicksFixedToNormalTickRate = false; // default for spectators to "catch-up" as quickly as possible
+static bool fastForwardTicksFixedToNormalTickRate = true; // can be set to false to "catch-up" as quickly as possible (but this may result in more jerky behavior)
 
 static unsigned numDroids[MAX_PLAYERS];
 static unsigned numMissionDroids[MAX_PLAYERS];
@@ -258,7 +258,7 @@ static GAMECODE renderLoop()
 						ASSERT(false, "Mission Results: saveGame Failed");
 						sstrcpy(msgbuffer, _("Could not save game!"));
 						addConsoleMessage(msgbuffer, LEFT_JUSTIFY, NOTIFY_MESSAGE);
-						deleteSaveGame(sRequestResult);
+						deleteSaveGame_classic(sRequestResult);
 					}
 				}
 				else if (bMultiPlayer || saveMidMission())
@@ -274,7 +274,7 @@ static GAMECODE renderLoop()
 						ASSERT(!"saveGame(sRequestResult, GTYPE_SAVE_MIDMISSION) failed", "Mid Mission: saveGame Failed");
 						sstrcpy(msgbuffer, _("Could not save game!"));
 						addConsoleMessage(msgbuffer, LEFT_JUSTIFY, NOTIFY_MESSAGE);
-						deleteSaveGame(sRequestResult);
+						deleteSaveGame_classic(sRequestResult);
 					}
 				}
 				else
@@ -649,7 +649,7 @@ GAMECODE gameLoop()
 			&& numFastForwardTicks < maxFastForwardTicks // and the number of forced updates this call of gameLoop must not exceed the max allowed
 			&& checkPlayerGameTime(NET_ALL_PLAYERS);	// and there must be a new game tick available to process from all players
 
-		bool forceTryGameTickUpdate = canFastForwardGameTime && ((!fastForwardTicksFixedToNormalTickRate && numForcedUpdatesLastCall > 0) || numRegularUpdatesTicks > 0);
+		bool forceTryGameTickUpdate = canFastForwardGameTime && ((!fastForwardTicksFixedToNormalTickRate && numForcedUpdatesLastCall > 0) || numRegularUpdatesTicks > 0) && NETgameIsBehindPlayersByAtLeast(4);
 
 		// Update gameTime and graphicsTime, and corresponding deltas. Note that gameTime and graphicsTime pause, if we aren't getting our GAME_GAME_TIME messages.
 		auto timeUpdateResult = gameTimeUpdate(renderBudget > 0 || previousUpdateWasRender, forceTryGameTickUpdate);

@@ -31,7 +31,7 @@
 static CURSOR currentCursor = CURSOR_MAX;
 static CURSOR lastAppliedCursor = CURSOR_MAX;
 static SDL_Cursor *aCursors[CURSOR_MAX] = {};
-static bool monoCursor;
+static bool monoCursor = false;
 static bool cursorsEnabled = false;
 
 /* TODO: do bridge and attach need swapping? */
@@ -1291,6 +1291,11 @@ SDL_Cursor *init_system_ColorCursor(CURSOR cur, const char *fileName)
 #endif
 
 	SDL_Surface *surface = SDL_CreateRGBSurfaceFrom(psSprite->bmp, psSprite->width, psSprite->height, psSprite->depth * 8, psSprite->width * 4, rmask, gmask, bmask, amask);
+	if (!surface)
+	{
+		debug(LOG_FATAL, "Failed to create cursor because: %s", SDL_GetError());
+		return nullptr;
+	}
 	SDL_Cursor *pointer = SDL_CreateColorCursor(surface, psSprite->width / 2, psSprite->height / 2);	// We center the hotspot for all (FIXME ?)
 	if (!pointer)
 	{
@@ -1298,10 +1303,10 @@ SDL_Cursor *init_system_ColorCursor(CURSOR cur, const char *fileName)
 		exit(-1);
 	}
 
-	// free up image & surface data
+	// free up surface & image data
+	SDL_FreeSurface(surface);
 	free(psSprite->bmp);
 	free(psSprite);
-	SDL_FreeSurface(surface);
 
 	return pointer;
 }
@@ -1469,6 +1474,10 @@ void sdlFreeCursors()
 	unsigned int i;
 	for (i = 0 ; i < ARRAY_SIZE(aCursors); ++i)
 	{
+		if (aCursors[i] == nullptr)
+		{
+			continue;
+		}
 		SDL_FreeCursor(aCursors[i]);
 		aCursors[i] = nullptr;
 	}

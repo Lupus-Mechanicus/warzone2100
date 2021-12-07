@@ -22,6 +22,7 @@
 #include "lib/framework/frame.h"
 #include "lib/framework/wzapp.h"
 #include "lib/framework/rational.h"
+#include "lib/framework/physfs_ext.h"
 #include "objects.h"
 #include "levels.h"
 #include "basedef.h"
@@ -93,10 +94,12 @@ char	beaconMsg[MAX_PLAYERS][MAX_CONSOLE_STRING_LENGTH];		//beacon msg for each p
 static STRUCTURE	*psOldRE = nullptr;
 static char	sCurrentConsoleText[MAX_CONSOLE_STRING_LENGTH];			//remember what user types in console for beacon msg
 
+#define QUICKSAVE_CAM_FOLDER "savegames/campaign/QuickSave"
+#define QUICKSAVE_SKI_FOLDER "savegames/skirmish/QuickSave"
 #define QUICKSAVE_CAM_FILENAME "savegames/campaign/QuickSave.gam"
 #define QUICKSAVE_SKI_FILENAME "savegames/skirmish/QuickSave.gam"
-#define QUICKSAVE_CAM_JSON_FILENAME "savegames/campaign/QuickSave/QuickSave.json"
-#define QUICKSAVE_SKI_JSON_FILENAME "savegames/skirmish/QuickSave/QuickSave.json"
+#define QUICKSAVE_CAM_JSON_FILENAME QUICKSAVE_CAM_FOLDER "/QuickSave.json"
+#define QUICKSAVE_SKI_JSON_FILENAME QUICKSAVE_SKI_FOLDER "/QuickSave.json"
 
 #define SPECTATOR_NO_OP() do { if (selectedPlayer >= MAX_PLAYERS || NetPlay.players[selectedPlayer].isSpectator) { return; } } while (0)
 
@@ -154,13 +157,13 @@ void	kf_ToggleMissionTimer()
 
 void	kf_ToggleShowGateways()
 {
-	addConsoleMessage("Gateways toggled.", DEFAULT_JUSTIFY,  SYSTEM_MESSAGE);
+	addConsoleMessage(_("Gateways toggled."), DEFAULT_JUSTIFY,  SYSTEM_MESSAGE);
 	showGateways = !showGateways;
 }
 
 void	kf_ToggleShowPath()
 {
-	addConsoleMessage("Path display toggled.", DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
+	addConsoleMessage(_("Path display toggled."), DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
 	showPath = !showPath;
 }
 
@@ -188,7 +191,7 @@ void	kf_PowerInfo()
 
 	for (i = 0; i < game.maxPlayers; i++)
 	{
-		console("Player %d: %d power", i, (int)getPower(i));
+		console(_("Player %d: %d power"), i, (int)getPower(i));
 	}
 }
 
@@ -769,7 +772,7 @@ void	kf_TogglePower()
 void	kf_RecalcLighting()
 {
 	initLighting(0, 0, mapWidth, mapHeight);
-	addConsoleMessage("Lighting values for all tiles recalculated", DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
+	addConsoleMessage(_("Lighting values for all tiles recalculated"), DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
 }
 
 // --------------------------------------------------------------------------
@@ -811,7 +814,7 @@ void	kf_TriFlip()
 	MAPTILE	*psTile;
 	psTile = mapTile(mouseTileX, mouseTileY);
 	TOGGLE_TRIFLIP(psTile);
-//	addConsoleMessage("Triangle flip status toggled",DEFAULT_JUSTIFY,SYSTEM_MESSAGE);
+//	addConsoleMessage(_("Triangle flip status toggled"),DEFAULT_JUSTIFY,SYSTEM_MESSAGE);
 }
 
 // --------------------------------------------------------------------------
@@ -824,7 +827,7 @@ void	kf_TileInfo()
 	debug(LOG_ERROR, "Tile position=(%d, %d) Terrain=%d Texture=%u Height=%d Illumination=%u",
 	      mouseTileX, mouseTileY, (int)terrainType(psTile), TileNumber_tile(psTile->texture), psTile->height,
 	      psTile->illumination);
-	addConsoleMessage("Tile info dumped into log", DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
+	addConsoleMessage(_("Tile info dumped into log"), DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
 }
 
 /* Toggles fog on/off */
@@ -2490,7 +2493,7 @@ void	kf_AddHelpBlip()
 void kf_NoAssert()
 {
 	debugDisableAssert();
-	console("Asserts turned off");
+	console(_("Asserts turned off"));
 	debug(LOG_ERROR, "Asserts turned off");
 }
 
@@ -2506,7 +2509,7 @@ void kf_BuildPrevPage()
 
 	if ((psTForm->currentPage() == 0) || !psTForm->setCurrentPage(psTForm->currentPage() - 1))
 	{
-		audio_PlayTrack(ID_SOUND_BUILD_FAIL);
+		audio_PlayBuildFailedOnce();
 		return;
 	}
 
@@ -2526,7 +2529,7 @@ void kf_BuildNextPage()
 	if (!psTForm->setCurrentPage(psTForm->currentPage() + 1))
 	{
 		// went over max
-		audio_PlayTrack(ID_SOUND_BUILD_FAIL);
+		audio_PlayBuildFailedOnce();
 		return;
 	}
 
@@ -2538,7 +2541,7 @@ void kf_QuickSave()
 	// Bail out if we're running a _true_ multiplayer game or are playing a tutorial
 	if (runningMultiplayer() || bInTutorial)
 	{
-		console("QuickSave not allowed for multiplayer or tutorial games");
+		console(_("QuickSave not allowed for multiplayer or tutorial games"));
 		return;
 	}
 	if (InGameOpUp || isInGamePopupUp)
@@ -2547,19 +2550,18 @@ void kf_QuickSave()
 	}
 
 	const char *filename = bMultiPlayer? QUICKSAVE_SKI_FILENAME : QUICKSAVE_CAM_FILENAME;
-	if (PHYSFS_exists(filename))
+	const char *quickSaveFolder = bMultiPlayer? QUICKSAVE_SKI_FOLDER : QUICKSAVE_CAM_FOLDER;
+	if (WZ_PHYSFS_isDirectory(quickSaveFolder))
 	{
-		char *oldsave = strdup(filename);
-		deleteSaveGame(oldsave);
-		free(oldsave);
+		deleteSaveGame(quickSaveFolder);
 	}
-	if (saveGame(filename, GTYPE_SAVE_MIDMISSION))
+	if (saveGame(filename, GTYPE_SAVE_MIDMISSION)) // still expects a .gam filename... TODO: FIX
 	{
-		console("QuickSave");
+		console(_("QuickSave"));
 	}
 	else
 	{
-		console("QuickSave failed");
+		console(_("QuickSave failed"));
 	}
 }
 
@@ -2568,7 +2570,7 @@ void kf_QuickLoad()
 	// Bail out if we're running a _true_ multiplayer game or are playing a tutorial
 	if (runningMultiplayer() || bInTutorial)
 	{
-		console("QuickLoad not allowed for multiplayer or tutorial games");
+		console(_("QuickLoad not allowed for multiplayer or tutorial games"));
 		return;
 	}
 	if (InGameOpUp || isInGamePopupUp)
@@ -2580,7 +2582,7 @@ void kf_QuickLoad()
 	// check for .json version, because that's what going to be loaded anyway
 	if (PHYSFS_exists(filename) || PHYSFS_exists(bMultiPlayer? QUICKSAVE_SKI_JSON_FILENAME : QUICKSAVE_CAM_JSON_FILENAME))
 	{
-		console("QuickLoad");
+		console(_("QuickLoad"));
 		audio_StopAll();
 		//clear out any mission widgets - timers etc that may be on the screen
 		clearMissionWidgets();
@@ -2595,7 +2597,7 @@ void kf_QuickLoad()
 	}
 	else
 	{
-		console("QuickSave file does not exist yet");
+		console(_("QuickSave file does not exist yet"));
 	}
 }
 

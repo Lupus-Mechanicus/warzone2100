@@ -81,6 +81,7 @@
 #include "chat.h" // for InGameChatMessage
 #include "warzoneconfig.h"
 #include "stdinreader.h"
+#include "spectatorwidgets.h"
 
 // ////////////////////////////////////////////////////////////////////////////
 // ////////////////////////////////////////////////////////////////////////////
@@ -1247,6 +1248,12 @@ bool recvMessage()
 				}
 				NETend();
 
+				if (player_id >= MAX_CONNECTED_PLAYERS)
+				{
+					debug(LOG_INFO, "** player %u has dropped - huh?", player_id);
+					break;
+				}
+
 				if (whosResponsible(player_id) != queue.index && queue.index != NetPlay.hostPlayer)
 				{
 					HandleBadParam("NET_PLAYER_DROPPED given incorrect params.", player_id, queue.index);
@@ -1549,6 +1556,12 @@ bool recvResearchStatus(NETQUEUE queue)
 		// Set that facility to research
 		if (psBuilding && psBuilding->pFunctionality)
 		{
+			if (!psBuilding->pStructureType || psBuilding->pStructureType->type != REF_RESEARCH)
+			{
+				debug(LOG_INFO, "Structure is not a research facility: \"%s\".", (psBuilding->pStructureType) ? psBuilding->pStructureType->id.toUtf8().c_str() : "");
+				return false;
+			}
+
 			psResFacilty = (RESEARCH_FACILITY *) psBuilding->pFunctionality;
 
 			popStatusPending(*psResFacilty);  // Research is no longer pending, as it's actually starting now.
@@ -1605,6 +1618,12 @@ bool recvResearchStatus(NETQUEUE queue)
 		// Stop the facility doing any research
 		if (psBuilding)
 		{
+			if (!psBuilding->pStructureType || psBuilding->pStructureType->type != REF_RESEARCH)
+			{
+				debug(LOG_INFO, "Structure is not a research facility: \"%s\".", (psBuilding->pStructureType) ? psBuilding->pStructureType->id.toUtf8().c_str() : "");
+				return false;
+			}
+
 			cancelResearch(psBuilding, ModeImmediate);
 			popStatusPending(*(RESEARCH_FACILITY *)psBuilding->pFunctionality);  // Research cancellation is no longer pending, as it's actually cancelling now.
 		}
@@ -1649,7 +1668,7 @@ bool NetworkTextMessage::receive(NETQUEUE queue)
 		sender = queue.index;  // Fix corrupted sender.
 	}
 
-	if (sender >= MAX_CONNECTED_PLAYERS || (!NetPlay.players[sender].allocated && NetPlay.players[sender].ai == AI_OPEN))
+	if (sender >= MAX_CONNECTED_PLAYERS || (sender >= 0 && (!NetPlay.players[sender].allocated && NetPlay.players[sender].ai == AI_OPEN)))
 	{
 		return false;
 	}
@@ -1871,8 +1890,9 @@ bool recvMapFileRequested(NETQUEUE queue)
 	NETbin(hash.bytes, hash.Bytes);
 	NETend();
 
-	auto &files = NetPlay.players[player].wzFiles;
-	if (std::any_of(files.begin(), files.end(), [&](WZFile const &file) { return file.hash == hash; }))
+	auto files = NetPlay.players[player].wzFiles;
+	ASSERT_OR_RETURN(false, files != nullptr, "wzFiles is uninitialized?? (Player: %" PRIu32 ")", player);
+	if (std::any_of(files->begin(), files->end(), [&](WZFile const &file) { return file.hash == hash; }))
 	{
 		return true;  // Already sending this file, do nothing.
 	}
@@ -1929,7 +1949,7 @@ bool recvMapFileRequested(NETQUEUE queue)
 
 	// Schedule file to be sent.
 	debug(LOG_INFO, "File is valid, sending [directory: %s] %s to client %u", WZ_PHYSFS_getRealDir_String(filename.c_str()).c_str(), filename.c_str(), player);
-	files.emplace_back(pFileHandle, filename, hash, fileSize_u32);
+	files->emplace_back(pFileHandle, filename, hash, fileSize_u32);
 
 	return true;
 }
@@ -1945,7 +1965,7 @@ void sendMap()
 	uint64_t totalFilesToSend = 0;
 	for (int i = 0; i < MAX_CONNECTED_PLAYERS; ++i)
 	{
-		totalFilesToSend += NetPlay.players[i].wzFiles.size();
+		totalFilesToSend += (NetPlay.players[i].wzFiles) ? NetPlay.players[i].wzFiles->size() : 0;
 	}
 	const uint64_t maxMicroSecondsPerFile = maxMicroSecondsPerSendMapCall / std::max((uint64_t)1, totalFilesToSend);
 
@@ -1955,7 +1975,12 @@ void sendMap()
 
 	for (int i = 0; i < MAX_CONNECTED_PLAYERS; ++i)
 	{
-		auto &files = NetPlay.players[i].wzFiles;
+		auto pFiles = NetPlay.players[i].wzFiles;
+		if (pFiles == nullptr)
+		{
+			continue;
+		}
+		auto &files = *pFiles;
 		for (auto &file : files)
 		{
 			int done = 0;
@@ -1973,7 +1998,7 @@ void sendMap()
 				debug(LOG_INFO, "=== File has been sent to player %d ===", i);
 			}
 		}
-		files.erase(std::remove_if(files.begin(), files.end(), [](WZFile const &file) { return file.handle == nullptr; }), files.end());
+		files.erase(std::remove_if(files.begin(), files.end(), [](WZFile const &file) { return file.handle() == nullptr; }), files.end());
 	}
 }
 
@@ -1981,10 +2006,10 @@ void sendMap()
 bool recvMapFileData(NETQUEUE queue)
 {
 	NETrecvFile(queue);
-	if (NetPlay.wzFiles.empty())
+	if (NET_getDownloadingWzFiles().empty())
 	{
 		netPlayersUpdated = true;  // Remove download icon from ourselves.
-		addConsoleMessage("MAP DOWNLOADED!", DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
+		addConsoleMessage(_("MAP DOWNLOADED!"), DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
 		sendInGameSystemMessage("MAP DOWNLOADED");
 		debug(LOG_INFO, "=== File has been received. ===");
 
@@ -2344,6 +2369,10 @@ bool makePlayerSpectator(uint32_t playerIndex, bool removeAllStructs, bool quiet
 		}
 	}
 
+	if (!quietly)
+	{
+		debug(LOG_INFO, "player: %" PRIu32 " (gameTime: %" PRIu32 ")", playerIndex, gameTime);
+	}
 	if (!NETisReplay() || playerIndex != realSelectedPlayer)
 	{
 		syncDebug("player%u", (unsigned)playerIndex);
@@ -2377,6 +2406,8 @@ bool makePlayerSpectator(uint32_t playerIndex, bool removeAllStructs, bool quiet
 		bool lowUISpectatorMode = streamer_spectator_mode() || NETisReplay();
 		addConsoleMessage(_("Spectator Mode"), CENTRE_JUSTIFY, SYSTEM_MESSAGE, false, (!lowUISpectatorMode) ? MAX_CONSOLE_MESSAGE_DURATION : 15);
 		addConsoleMessage(_("You are a spectator. Enjoy watching the game!"), CENTRE_JUSTIFY, SYSTEM_MESSAGE, false, (!lowUISpectatorMode) ? 30 : 15);
+
+		specLayerInit(!streamer_spectator_mode());
 	}
 
 	turnOffMultiMsg(false);

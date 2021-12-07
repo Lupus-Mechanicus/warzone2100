@@ -787,7 +787,7 @@ void orderUpdateDroid(DROID *psDroid)
 				actionDroid(psDroid, DACTION_NONE);
 				if (psDroid->player == selectedPlayer)
 				{
-					audio_PlayTrack(ID_SOUND_BUILD_FAIL);
+					audio_PlayBuildFailedOnce();
 					addConsoleMessage(_("We can't do that! We must be a Cyborg unit to use a Cyborg Transport!"), DEFAULT_JUSTIFY, selectedPlayer);
 				}
 			}
@@ -1448,6 +1448,16 @@ void orderDroidBase(DROID *psDroid, DROID_ORDER_DATA *psOrder)
 		// help to build a structure that is starting to be built
 		ASSERT_OR_RETURN(, isConstructionDroid(psDroid), "Not a constructor droid");
 		ASSERT_OR_RETURN(, psOrder->psObj != nullptr, "Help to build a NULL pointer?");
+		if (psDroid->action == DACTION_BUILD && psOrder->psObj == psDroid->psActionTarget[0] 
+			// skip DORDER_LINEBUILD -> we still want to drop pending structure blueprints
+			// this isn't a perfect solution, because ordering a LINEBUILD with negative energy, and then clicking
+			// on first structure being built, will remove it, as we change order from DORDR_LINEBUILD to DORDER_BUILD
+			&& (psDroid->order.type != DORDER_LINEBUILD))
+		{
+			// we are already building it, nothing to do
+			objTrace(psDroid->id, "Ignoring DORDER_HELPBUILD because already buildig object %i", psOrder->psObj->id);
+			break;
+		}
 		psDroid->order = *psOrder;
 		psDroid->order.pos = psOrder->psObj->pos.xy();
 		psDroid->order.psStats = ((STRUCTURE *)psOrder->psObj)->pStructureType;
@@ -1523,7 +1533,7 @@ void orderDroidBase(DROID *psDroid, DROID_ORDER_DATA *psOrder)
 		}
 		else if (psDroid->player == selectedPlayer)
 		{
-			audio_PlayTrack(ID_SOUND_BUILD_FAIL);
+			audio_PlayBuildFailedOnce();
 		}
 		break;
 	case DORDER_RTB:
@@ -1719,13 +1729,12 @@ void orderDroidBase(DROID *psDroid, DROID_ORDER_DATA *psOrder)
 		break;
 	case DORDER_REARM:
 		// didn't get executed before
-		if (!isVtolDroid(psDroid))
+		if (!vtolRearming(psDroid))
 		{
-			break;
+			psDroid->order = *psOrder;
+			actionDroid(psDroid, DACTION_MOVETOREARM, psOrder->psObj);
+			assignVTOLPad(psDroid, (STRUCTURE *)psOrder->psObj);
 		}
-		psDroid->order = *psOrder;
-		actionDroid(psDroid, DACTION_MOVETOREARM, psOrder->psObj);
-		assignVTOLPad(psDroid, (STRUCTURE *)psOrder->psObj);
 		break;
 	case DORDER_CIRCLE:
 		if (!isVtolDroid(psDroid))
@@ -3194,24 +3203,30 @@ static inline RtrBestResult decideWhereToRepairAndBalance(DROID *psDroid)
 			}
 		}
 	}
-
-	// one of these lists is empty when on mission
-	DROID *psdroidList = apsDroidLists[psDroid->player] != nullptr ? apsDroidLists[psDroid->player] : mission.apsDroidLists[psDroid->player];
-	for (DROID *psCurr = psdroidList; psCurr != nullptr; psCurr = psCurr->psNext)
+	// if we are repair droid ourselves, don't consider other repairs droids
+	// because that causes havoc on front line: RT repairing themselves,
+	// blocking everyone else. And everyone else moving toward RT, also toward front line.s
+	// Ideally, we should just avoid retreating toward "danger", but dangerMap is only for multiplayer
+	if (psDroid->droidType != DROID_REPAIR && psDroid->droidType != DROID_CYBORG_REPAIR)
 	{
-		if (psCurr->droidType == DROID_REPAIR || psCurr->droidType == DROID_CYBORG_REPAIR)
+		// one of these lists is empty when on mission
+		DROID *psdroidList = apsDroidLists[psDroid->player] != nullptr ? apsDroidLists[psDroid->player] : mission.apsDroidLists[psDroid->player];
+		for (DROID *psCurr = psdroidList; psCurr != nullptr; psCurr = psCurr->psNext)
 		{
-			thisDistToRepair = droidSqDist(psDroid, psCurr);
-			if (thisDistToRepair <= 0)
+			if (psCurr->droidType == DROID_REPAIR || psCurr->droidType == DROID_CYBORG_REPAIR)
 			{
-				continue; // unreachable
-			}
-			vDroidPos.push_back(psCurr->pos);
-			vDroid.push_back(psCurr);
-			if (bestDistToRepairDroid > thisDistToRepair)
-			{
-				bestDistToRepairDroid = thisDistToRepair;
-				bestDroidPos = psCurr->pos;
+				thisDistToRepair = droidSqDist(psDroid, psCurr);
+				if (thisDistToRepair <= 0)
+				{
+					continue; // unreachable
+				}
+				vDroidPos.push_back(psCurr->pos);
+				vDroid.push_back(psCurr);
+				if (bestDistToRepairDroid > thisDistToRepair)
+				{
+					bestDistToRepairDroid = thisDistToRepair;
+					bestDroidPos = psCurr->pos;
+				}
 			}
 		}
 	}

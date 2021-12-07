@@ -116,6 +116,7 @@
 
 #include "activity.h"
 #include <algorithm>
+#include "3rdparty/gsl_finally.h"
 
 #define MAP_PREVIEW_DISPLAY_TIME 2500	// number of milliseconds to show map in preview
 #define VOTE_TAG                 "voting"
@@ -378,6 +379,7 @@ const char *getAIName(int player)
 {
 	if (NetPlay.players[player].ai >= 0 && NetPlay.players[player].ai != AI_CUSTOM)
 	{
+		ASSERT_OR_RETURN(_("Commander"), NetPlay.players[player].ai < aidata.size(), "Invalid AI (index: %" PRIi8 ", num AIs: %zu)", NetPlay.players[player].ai, aidata.size());
 		return aidata[NetPlay.players[player].ai].name;
 	}
 	else
@@ -632,7 +634,7 @@ void loadMapPreview(bool hideInterface)
 	LEVEL_DATASET *psLevel = levFindDataSet(game.map, &game.hash);
 	if (psLevel == nullptr)
 	{
-		debug(LOG_INFO, "Could not find level dataset \"%s\" %s. We %s waiting for a download.", game.map, game.hash.toString().c_str(), !NetPlay.wzFiles.empty() ? "are" : "aren't");
+		debug(LOG_INFO, "Could not find level dataset \"%s\" %s. We %s waiting for a download.", game.map, game.hash.toString().c_str(), !NET_getDownloadingWzFiles().empty() ? "are" : "aren't");
 		loadEmptyMapPreview();
 		return;
 	}
@@ -2680,7 +2682,7 @@ bool recvReadyRequest(NETQUEUE queue)
 
 	// do not allow players to select 'ready' if we are sending a map too them!
 	// TODO: make a new icon to show this state?
-	if (!NetPlay.players[player].wzFiles.empty())
+	if (NetPlay.players[player].fileSendInProgress())
 	{
 		return false;
 	}
@@ -4327,11 +4329,14 @@ public:
 			if (playerDifficulty >= 0)
 			{
 				sstrcpy(tooltip, _(difficultyList[playerDifficulty]));
-				const char *difficultyTip = aidata[NetPlay.players[playerIdx].ai].difficultyTips[playerDifficulty];
-				if (strcmp(difficultyTip, "") != 0)
+				if (NetPlay.players[playerIdx].ai < aidata.size())
 				{
-					sstrcat(tooltip, "\n");
-					sstrcat(tooltip, difficultyTip);
+					const char *difficultyTip = aidata[NetPlay.players[playerIdx].ai].difficultyTips[playerDifficulty];
+					if (strcmp(difficultyTip, "") != 0)
+					{
+						sstrcat(tooltip, "\n");
+						sstrcat(tooltip, difficultyTip);
+					}
 				}
 			}
 			bool freshDifficultyButton = (difficultyChooserButton == nullptr);
@@ -4781,6 +4786,8 @@ void kickPlayer(uint32_t player_id, const char *reason, LOBBY_ERROR_TYPES type)
 {
 	ASSERT_HOST_ONLY(return);
 
+	debug(LOG_INFO, "Kicking player %u (%s). Reason: %s", (unsigned int)player_id, getPlayerName(player_id), reason);
+
 	// send a kick msg
 	NETbeginEncode(NETbroadcastQueue(), NET_KICK);
 	NETuint32_t(&player_id);
@@ -4789,7 +4796,6 @@ void kickPlayer(uint32_t player_id, const char *reason, LOBBY_ERROR_TYPES type)
 	NETend();
 	NETflush();
 	wzDelay(300);
-	debug(LOG_NET, "Kicking player %u (%s). Reason: %s", (unsigned int)player_id, getPlayerName(player_id), reason);
 
 	ActivityManager::instance().hostKickPlayer(NetPlay.players[player_id], type, reason);
 
@@ -5177,15 +5183,7 @@ static void stopJoining(std::shared_ptr<WzTitleUI> parent)
 		sendLeavingMsg();								// say goodbye
 		NETclose();										// quit running game.
 
-		// if we were in a midle of transferring a file, then close the file handle
-		for (auto const &file : NetPlay.wzFiles)
-		{
-			debug(LOG_NET, "closing aborted file");
-			PHYSFS_close(file.handle);
-			ASSERT(!file.filename.empty(), "filename must not be empty");
-			PHYSFS_delete(file.filename.c_str()); 		// delete incomplete (map) file
-		}
-		NetPlay.wzFiles.clear();
+		NET_clearDownloadingWZFiles();
 		ingame.localJoiningInProgress = false;			// reset local flags
 		ingame.localOptionsReceived = false;
 
@@ -5672,6 +5670,7 @@ static void randomizeOptions()
 		updateMapWidgets(mapData);
 		loadMapPreview(false);
 		loadMapChallengeAndPlayerSettings();
+		debug(LOG_INFO, "Switching map: %s (builtin: %d)", (mapData->pName) ? mapData->pName : "n/a", (int)builtInMap);
 	}
 
 	// Reset and randomize player positions, also to guard
@@ -6163,7 +6162,7 @@ void handleAutoReadyRequest()
 	// and not-ready when files remain to be downloaded
 	if (NetPlay.players[selectedPlayer].isSpectator)
 	{
-		bool haveData = NetPlay.wzFiles.empty();
+		bool haveData = NET_getDownloadingWzFiles().empty();
 		desiredReadyState = haveData;
 	}
 
@@ -6386,7 +6385,13 @@ void WzMultiplayerOptionsTitleUI::frontendMultiMessages(bool running)
 				NETend();
 
 				debug(LOG_WARNING, "Received file cancel request from player %u, they weren't expecting the file.", queue.index);
-				auto &wzFiles = NetPlay.players[queue.index].wzFiles;
+				auto &pWzFiles = NetPlay.players[queue.index].wzFiles;
+				if (pWzFiles == nullptr)
+				{
+					ASSERT(false, "Null wzFiles (player: %" PRIu8 ")", queue.index);
+					break;
+				}
+				auto &wzFiles = *pWzFiles;
 				wzFiles.erase(std::remove_if(wzFiles.begin(), wzFiles.end(), [&](WZFile const &file) { return file.hash == hash; }), wzFiles.end());
 			}
 			break;
@@ -6877,6 +6882,7 @@ TITLECODE WzMultiplayerOptionsTitleUI::run()
 					game.isRandom = CheckForRandom(mapData->realFileName, mapData->apDataFiles[0]);
 					loadMapPreview(true);
 					loadMapChallengeAndPlayerSettings();
+					debug(LOG_INFO, "Switching map: %s (builtin: %d)", (mapData->pName) ? mapData->pName : "n/a", (int)builtInMap);
 
 					WzString name = formatGameName(game.map);
 					widgSetString(psWScreen, MULTIOP_MAP + 1, name.toUtf8().c_str()); //What a horrible, horrible way to do this! FIX ME! (See addBlueForm)
@@ -7068,7 +7074,7 @@ void WzMultiplayerOptionsTitleUI::start()
 		resetPlayerConfiguration(true);
 		memset(&locked, 0, sizeof(locked));
 		spectatorHost = false;
-		defaultOpenSpectatorSlots = 0;
+		defaultOpenSpectatorSlots = war_getMPopenSpectatorSlots();
 		loadMapChallengeAndPlayerSettings(true);
 		game.isMapMod = false;
 		game.isRandom = false;
@@ -7226,8 +7232,14 @@ static void displayAi(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
 	PIELIGHT textColor = WZCOL_FORM_TEXT;
 	if (j >= 0)
 	{
-		ASSERT(j < aidata.size(), "Invalid aidata index: %d", j);
-		displayText = aidata[j].name;
+		if (j < aidata.size())
+		{
+			displayText = aidata[j].name;
+		}
+		else
+		{
+			debug(LOG_ERROR, "Invalid aidata index: %d; (num AIs: %zu)", j, aidata.size());
+		}
 	}
 	else
 	{
@@ -7506,7 +7518,7 @@ void displayColour(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
 	const int j = psWidget->UserData;
 
 	drawBoxForPlayerInfoSegment(j, x, y, psWidget->width(), psWidget->height());
-	if (NetPlay.players[j].wzFiles.empty() && NetPlay.players[j].difficulty != AIDifficulty::DISABLED && !NetPlay.players[j].isSpectator)
+	if (!NetPlay.players[j].fileSendInProgress() && NetPlay.players[j].difficulty != AIDifficulty::DISABLED && !NetPlay.players[j].isSpectator)
 	{
 		int player = getPlayerColour(j);
 		STATIC_ASSERT(MAX_PLAYERS <= 16);
@@ -7521,7 +7533,7 @@ void displayFaction(WIDGET *psWidget, UDWORD xOffset, UDWORD yOffset)
 	const int j = psWidget->UserData;
 
 	drawBoxForPlayerInfoSegment(j, x, y, psWidget->width(), psWidget->height());
-	if (NetPlay.players[j].wzFiles.empty() && NetPlay.players[j].difficulty != AIDifficulty::DISABLED && !NetPlay.players[j].isSpectator)
+	if (!NetPlay.players[j].fileSendInProgress() && NetPlay.players[j].difficulty != AIDifficulty::DISABLED && !NetPlay.players[j].isSpectator)
 	{
 		FactionID faction = NetPlay.players[j].faction;
 		iV_DrawImage(FrontImages, factionIcon(faction), x + 5, y + 8);
@@ -7787,7 +7799,9 @@ std::shared_ptr<W_BUTTON> addMultiBut(WIDGET &parent, UDWORD id, UDWORD x, UDWOR
 
 std::shared_ptr<W_BUTTON> addMultiBut(const std::shared_ptr<W_SCREEN> &screen, UDWORD formid, UDWORD id, UDWORD x, UDWORD y, UDWORD width, UDWORD height, const char *tipres, UDWORD norm, UDWORD down, UDWORD hi, unsigned tc, uint8_t alpha)
 {
-	return addMultiBut(*widgGetFromID(screen, formid), id, x, y, width, height, tipres, norm, down, hi, tc, alpha);
+	WIDGET *pWidget = widgGetFromID(screen, formid);
+	ASSERT(pWidget != nullptr, "Unable to find formID: %" PRIu32, formid);
+	return addMultiBut(*pWidget, id, x, y, width, height, tipres, norm, down, hi, tc, alpha);
 }
 
 /* Returns true if the multiplayer game can start (i.e. all players are ready) */
@@ -7915,9 +7929,9 @@ inline void to_json(nlohmann::json& j, const MULTIPLAYERGAME& p) {
 	j = nlohmann::json::object();
 	j["type"] = p.type;
 	j["scavengers"] = p.scavengers;
-	j["map"] = p.map;
+	j["map"] = WzString::fromUtf8(p.map).toStdString(); // Wrap this in WzString to handle invalid UTF-8 before adding to json object
 	j["maxPlayers"] = p.maxPlayers;
-	j["name"] = p.name;
+	j["name"] = WzString::fromUtf8(p.name).toStdString(); // Wrap this in WzString to handle invalid UTF-8 before adding to json object
 	j["hash"] = p.hash;
 	j["modHashes"] = p.modHashes;
 	j["power"] = p.power;
@@ -8013,7 +8027,7 @@ inline void from_json(const nlohmann::json& j, MULTIPLAYERINGAME& p) {
 inline void to_json(nlohmann::json& j, const PLAYER& p) {
 
 	j = nlohmann::json::object();
-	j["name"] = p.name;
+	j["name"] = WzString::fromUtf8(p.name).toStdString(); // Wrap this in WzString to handle invalid UTF-8 before adding to json object
 	j["position"] = p.position;
 	j["colour"] = p.colour;
 	j["allocated"] = p.allocated;
@@ -8047,7 +8061,14 @@ inline void from_json(const nlohmann::json& j, PLAYER& p) {
 	p.difficulty = static_cast<AIDifficulty>(difficultyInt); // TODO CHECK
 	// autoGame // MAYBE NOT?
 	// Do not persist wzFiles
-	p.wzFiles.clear();
+	if (p.wzFiles)
+	{
+		p.wzFiles->clear();
+	}
+	else
+	{
+		ASSERT(false, "Null wzFiles?");
+	}
 	// Do not persist IPtextAddress
 	auto factionUint = j.at("faction").get<uint8_t>();
 	p.faction = static_cast<FactionID>(factionUint); // TODO CHECK
@@ -8129,7 +8150,84 @@ bool WZGameReplayOptionsHandler::saveOptions(nlohmann::json& object) const
 	return true;
 }
 
-bool WZGameReplayOptionsHandler::restoreOptions(const nlohmann::json& object, uint32_t replay_netcodeMajor, uint32_t replay_netcodeMinor)
+constexpr PHYSFS_sint64 MAX_REPLAY_EMBEDDED_MAP_SIZE_LIMIT = 150 * 1024;
+
+size_t WZGameReplayOptionsHandler::maximumEmbeddedMapBufferSize() const
+{
+	return MAX_REPLAY_EMBEDDED_MAP_SIZE_LIMIT;
+}
+
+bool WZGameReplayOptionsHandler::saveMap(EmbeddedMapData& embeddedMapData) const
+{
+	ASSERT_OR_RETURN(false, embeddedMapData.mapBinaryData.empty(), "Non empty output buffer?");
+
+	// Provide "version" for this data, just in case it needs to change in the future
+	embeddedMapData.dataVersion = 1;
+
+	if (game.isMapMod)
+	{
+		// do not store map-mods in the replay as they are (a) deprecated and (b) may be huge
+		return true;
+	}
+
+	LEVEL_DATASET *mapData = levFindDataSet(game.map, &game.hash);
+	ASSERT_OR_RETURN(false, mapData != nullptr, "Unable to find map??");
+
+	if (!mapData->realFileName)
+	{
+		// built-in maps don't have realFileNames for the map archives, nor do we want to save them
+		return true;
+	}
+
+	PHYSFS_file *mapFileHandle = PHYSFS_openRead(mapData->realFileName);
+	if (mapFileHandle == nullptr)
+	{
+		debug(LOG_INFO, "Unable to open for reading: %s; error: %s", mapData->realFileName, WZ_PHYSFS_getLastError());
+		return false;
+	}
+	{
+		auto free_map_handle_ref = gsl::finally([mapFileHandle] { PHYSFS_close(mapFileHandle); });  // establish exit action
+
+		PHYSFS_sint64 filesize = PHYSFS_fileLength(mapFileHandle);
+		ASSERT_OR_RETURN(false, filesize > 0, "Invalid filesize");
+		if (filesize > MAX_REPLAY_EMBEDDED_MAP_SIZE_LIMIT)
+		{
+			// currently, an expected failure
+			return true;
+		}
+		// resize the mapBinaryData to be able to contain the map data
+		embeddedMapData.mapBinaryData.resize(static_cast<size_t>(filesize));
+		auto readBytes = WZ_PHYSFS_readBytes(mapFileHandle, embeddedMapData.mapBinaryData.data(), static_cast<PHYSFS_uint32>(filesize));
+		ASSERT_OR_RETURN(false, readBytes == filesize, "Read failed");
+	}
+
+	return true;
+}
+
+size_t WZGameReplayOptionsHandler::desiredBufferSize() const
+{
+	auto currentGameMode = ActivityManager::instance().getCurrentGameMode();
+	switch (currentGameMode)
+	{
+		case ActivitySink::GameMode::MENUS:
+			// should not happen
+			break;
+		case ActivitySink::GameMode::CAMPAIGN:
+		case ActivitySink::GameMode::CHALLENGE:
+			// replays not currently supported
+			break;
+		case ActivitySink::GameMode::SKIRMISH:
+			return 0; // use default
+		case ActivitySink::GameMode::MULTIPLAYER:
+			// big games need a big buffer
+			return std::numeric_limits<size_t>::max();
+		default:
+			debug(LOG_INFO, "Unhandled case: %u", (unsigned int)currentGameMode);
+	}
+	return 0;
+}
+
+bool WZGameReplayOptionsHandler::restoreOptions(const nlohmann::json& object, EmbeddedMapData&& embeddedMapData, uint32_t replay_netcodeMajor, uint32_t replay_netcodeMinor)
 {
 	// random seed
 	uint32_t rand_seed = object.at("randSeed").get<uint32_t>();
@@ -8217,6 +8315,21 @@ bool WZGameReplayOptionsHandler::restoreOptions(const nlohmann::json& object, ui
 	{
 		debug(LOG_ERROR, "Failed to build map list");
 		return false;
+	}
+
+	if (embeddedMapData.dataVersion == 1)
+	{
+		if (!embeddedMapData.mapBinaryData.empty())
+		{
+			if (embeddedMapData.mapBinaryData.size() <= MAX_REPLAY_EMBEDDED_MAP_SIZE_LIMIT)
+			{
+				setSpecialInMemoryMap(std::move(embeddedMapData.mapBinaryData));
+			}
+			else
+			{
+				debug(LOG_ERROR, "Embedded map data size (%zu) exceeds maximum supported size", embeddedMapData.mapBinaryData.size());
+			}
+		}
 	}
 
 	LEVEL_DATASET *mapData = levFindDataSet(game.map, &game.hash);

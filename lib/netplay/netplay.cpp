@@ -236,6 +236,8 @@ static bool		allow_joining = false;
 static	bool server_not_there = false;
 static GAMESTRUCT	gamestruct;
 
+static std::vector<WZFile> DownloadingWzFiles;
+
 // update flags
 bool netPlayersUpdated;
 
@@ -291,6 +293,63 @@ static PlayerManagementRecord playerManagementRecord;
 static char const *versionString = version_getVersionString();
 
 #include "lib/netplay/netplay_config.h"
+
+static inline bool physfs_file_safe_close_impl(PHYSFS_file* f)
+{
+	if (!f)
+	{
+		return false;
+	}
+	if (!PHYSFS_isInit())
+	{
+		debug(LOG_INFO, "PhysFS isn't init - ignoring attempt to close (likely at program shutdown?)");
+		return false;
+	}
+	PHYSFS_close(f);
+	f = nullptr;
+	return true;
+}
+
+void physfs_file_safe_close(PHYSFS_file* f)
+{
+	physfs_file_safe_close_impl(f);
+}
+
+WZFile::~WZFile()
+{ }
+
+bool WZFile::closeFile()
+{
+	if (!handle_)
+	{
+		return false;
+	}
+	PHYSFS_file *file = handle_.release();
+	return physfs_file_safe_close_impl(file);
+}
+
+const std::vector<WZFile>& NET_getDownloadingWzFiles()
+{
+	return DownloadingWzFiles;
+}
+
+void NET_addDownloadingWZFile(WZFile&& newFile)
+{
+	DownloadingWzFiles.push_back(std::move(newFile));
+}
+
+void NET_clearDownloadingWZFiles()
+{
+	// if we were in a middle of transferring a file, then close the file handle
+	for (auto &file : DownloadingWzFiles)
+	{
+		debug(LOG_NET, "closing aborted file");
+		file.closeFile();
+		ASSERT(!file.filename.empty(), "filename must not be empty");
+		PHYSFS_delete(file.filename.c_str()); 		// delete incomplete (map) file
+	}
+	DownloadingWzFiles.clear();
+}
 
 NETPLAY::NETPLAY()
 {
@@ -506,12 +565,21 @@ static void initPlayerNetworkProps(int playerIndex)
 	NetPlay.players[playerIndex].kick = false;
 	NetPlay.players[playerIndex].ready = false;
 
-	NetPlay.players[playerIndex].wzFiles.clear();
+	if (NetPlay.players[playerIndex].wzFiles)
+	{
+		NetPlay.players[playerIndex].wzFiles->clear();
+	}
+	else
+	{
+		ASSERT(false, "PLAYERS.wzFiles is uninitialized??");
+	}
 	ingame.JoiningInProgress[playerIndex] = false;
 }
 
-void NET_InitPlayer(int i, bool initPosition, bool initTeams, bool initSpectator)
+void NET_InitPlayer(uint32_t i, bool initPosition, bool initTeams, bool initSpectator)
 {
+	ASSERT_OR_RETURN(, i < NetPlay.players.size(), "Invalid player_id: (%" PRIu32")",  i);
+
 	initPlayerNetworkProps(i);
 
 	NetPlay.players[i].difficulty = AIDifficulty::DISABLED;
@@ -577,7 +645,7 @@ void NET_InitPlayers(bool initTeams, bool initSpectator)
 
 	NetPlay.hostPlayer = NET_HOST_ONLY;	// right now, host starts always at index zero
 	NetPlay.playercount = 0;
-	NetPlay.wzFiles.clear();
+	DownloadingWzFiles.clear();
 	NET_waitingForIndexChangeAckSince = std::vector<optional<uint32_t>>(MAX_CONNECTED_PLAYERS, nullopt);
 	debug(LOG_NET, "Players initialized");
 }
@@ -736,6 +804,7 @@ static optional<uint32_t> NET_CreatePlayer(char const *name, bool forceTakeLowes
 
 static void NET_DestroyPlayer(unsigned int index, bool suppressActivityUpdates = false)
 {
+	ASSERT_OR_RETURN(, index < NetPlay.players.size(), "Invalid player_id: (%" PRIu32")",  index);
 	debug(LOG_NET, "Freeing slot %u for a new player", index);
 	NETlogEntry("Freeing slot for a new player.", SYNC_FLAG, index);
 	bool wasAllocated = NetPlay.players[index].allocated;
@@ -802,6 +871,7 @@ static void NETplayerClientDisconnect(uint32_t index)
  */
 static void NETplayerLeaving(UDWORD index)
 {
+	ASSERT(index < MAX_CONNECTED_PLAYERS, "Invalid index: %" PRIu32, index);
 	if (connected_bsocket[index])
 	{
 		debug(LOG_NET, "Player (%u) has left, closing socket %p", index, static_cast<void *>(connected_bsocket[index]));
@@ -817,11 +887,15 @@ static void NETplayerLeaving(UDWORD index)
 		debug(LOG_NET, "Player (%u) has left nicely, socket already closed?", index);
 	}
 	sync_counter.left++;
+	bool wasSpectator = NetPlay.players[index].isSpectator;
 	MultiPlayerLeave(index);		// more cleanup
 	if (ingame.localJoiningInProgress)  // Only if game hasn't actually started yet.
 	{
 		NET_DestroyPlayer(index);       // sets index player's array to false
-		resetReadyStatus(false);		// reset ready status for all players
+		if (!wasSpectator)
+		{
+			resetReadyStatus(false);		// reset ready status for all players
+		}
 	}
 }
 
@@ -832,6 +906,7 @@ static void NETplayerLeaving(UDWORD index)
  */
 static void NETplayerDropped(UDWORD index)
 {
+	ASSERT_OR_RETURN(, index < NetPlay.players.size(), "Invalid index: %" PRIu32, index);
 	uint32_t id = index;
 
 	if (!NetPlay.isHost)
@@ -841,6 +916,7 @@ static void NETplayerDropped(UDWORD index)
 	}
 
 	sync_counter.drops++;
+	bool wasSpectator = NetPlay.players[index].isSpectator;
 	MultiPlayerLeave(id);			// more cleanup
 	if (ingame.localJoiningInProgress)  // Only if game hasn't actually started yet.
 	{
@@ -850,7 +926,10 @@ static void NETplayerDropped(UDWORD index)
 		NETend();
 		debug(LOG_INFO, "sending NET_PLAYER_DROPPED for player %d", id);
 		NET_DestroyPlayer(id);          // just clears array
-		resetReadyStatus(false);		// reset ready status for all players
+		if (!wasSpectator)
+		{
+			resetReadyStatus(false);		// reset ready status for all players
+		}
 	}
 
 	NETsetPlayerConnectionStatus(CONNECTIONSTATUS_PLAYER_DROPPED, id);
@@ -1648,6 +1727,11 @@ bool NETsend(NETQUEUE queue, NetMessage const *message)
 			if (sockets[player] != nullptr && player != queue.exclude)
 			{
 				uint8_t *rawData = message->rawDataDup();
+				if (!rawData)
+				{
+					debug(LOG_FATAL, "Failed to allocate raw data (message type: %" PRIu8 ", player: %d)", message->type, player);
+					abort();
+				}
 				ssize_t rawLen   = message->rawLen();
 				size_t compressedRawLen;
 				result = writeAll(sockets[player], rawData, rawLen, &compressedRawLen);
@@ -1662,7 +1746,7 @@ bool NETsend(NETQUEUE queue, NetMessage const *message)
 				else if (result == SOCKET_ERROR)
 				{
 					// Write error, most likely client disconnect.
-					debug(LOG_ERROR, "Failed to send message: %s", strSockError(getSockErr()));
+					debug(LOG_ERROR, "Failed to send message (type: %" PRIu8 ", rawLen: %zu, compressedRawLen: %zu) to %" PRIu8 ": %s", message->type, message->rawLen(), compressedRawLen, player, strSockError(getSockErr()));
 					if (!isTmpQueue)
 					{
 						NETlogEntry("client disconnect?", SYNC_FLAG, player);
@@ -1738,7 +1822,7 @@ void NETflush()
 			// We are the host, send directly to player.
 			if (connected_bsocket[player] != nullptr)
 			{
-				socketFlush(connected_bsocket[player], &compressedRawLen);
+				socketFlush(connected_bsocket[player], player, &compressedRawLen);
 				nStats.rawBytes.sent += compressedRawLen;
 			}
 		}
@@ -1747,7 +1831,7 @@ void NETflush()
 			// We are the host, send directly to player.
 			if (tmp_socket[player] != nullptr)
 			{
-				socketFlush(tmp_socket[player], &compressedRawLen);
+				socketFlush(tmp_socket[player], std::numeric_limits<uint8_t>::max(), &compressedRawLen);
 				nStats.rawBytes.sent += compressedRawLen;
 			}
 		}
@@ -1756,7 +1840,7 @@ void NETflush()
 	{
 		if (bsocket != nullptr)
 		{
-			socketFlush(bsocket, &compressedRawLen);
+			socketFlush(bsocket, NetPlay.hostPlayer, &compressedRawLen);
 			nStats.rawBytes.sent += compressedRawLen;
 		}
 	}
@@ -2042,6 +2126,7 @@ static inline bool NETFilterMessageWhileSwappingPlayer(uint8_t sender, uint8_t t
 		char msg[256] = {'\0'};
 		ssprintf(msg, "Auto-kicking player %u, did not ack player index change within required timeframe.", (unsigned int)sender);
 		sendInGameSystemMessage(msg);
+		debug(LOG_INFO, "Client (player: %u) failed to ack player index swap (ignoring message type: %" PRIu8 ")", sender, type);
 		kickPlayer(sender, _("Client failed to ack player index swap"), ERROR_INVALID);
 		return true; // filter original message, of course
 	}
@@ -2788,18 +2873,17 @@ bool NETrecvGame(NETQUEUE *queue, uint8_t *type)
 int NETsendFile(WZFile &file, unsigned player)
 {
 	ASSERT_OR_RETURN(100, NetPlay.isHost, "Trying to send a file and we are not the host!");
-	ASSERT_OR_RETURN(100, file.handle != nullptr, "Null file handle");
+	ASSERT_OR_RETURN(100, file.handle() != nullptr, "Null file handle");
 
 	uint8_t inBuff[MAX_FILE_TRANSFER_PACKET];
 	memset(inBuff, 0x0, sizeof(inBuff));
 
 	// read some bytes.
-	PHYSFS_sint64 readBytesResult = WZ_PHYSFS_readBytes(file.handle, inBuff, MAX_FILE_TRANSFER_PACKET);
+	PHYSFS_sint64 readBytesResult = WZ_PHYSFS_readBytes(file.handle(), inBuff, MAX_FILE_TRANSFER_PACKET);
 	if (readBytesResult < 0)
 	{
 		ASSERT(readBytesResult >= 0, "Error reading file.");
-		PHYSFS_close(file.handle);
-		file.handle = nullptr;
+		file.closeFile();
 		return 100;
 	}
 	uint32_t bytesToRead = static_cast<uint32_t>(readBytesResult);
@@ -2815,8 +2899,7 @@ int NETsendFile(WZFile &file, unsigned player)
 	file.pos += bytesToRead;  // update position!
 	if (file.pos == file.size)
 	{
-		PHYSFS_close(file.handle);
-		file.handle = nullptr;  // We are done sending to this client.
+		file.closeFile(); // We are done sending to this client.
 	}
 
 	return static_cast<int>((uint64_t)file.pos * 100 / file.size);
@@ -2968,7 +3051,7 @@ int NETrecvFile(NETQUEUE queue)
 
 	debug(LOG_NET, "New file position is %u", pos);
 
-	auto file = std::find_if(NetPlay.wzFiles.begin(), NetPlay.wzFiles.end(), [&](WZFile const &file) { return file.hash == hash; });
+	auto file = std::find_if(DownloadingWzFiles.begin(), DownloadingWzFiles.end(), [&](WZFile const &file) { return file.hash == hash; });
 
 	auto sendCancelFileDownload = [](Sha256 &hash) {
 		NETbeginEncode(NETnetQueue(NetPlay.hostPlayer), NET_FILE_CANCELLED);
@@ -2976,7 +3059,7 @@ int NETrecvFile(NETQUEUE queue)
 		NETend();
 	};
 
-	if (file == NetPlay.wzFiles.end())
+	if (file == DownloadingWzFiles.end())
 	{
 		debug(LOG_WARNING, "Receiving file data we didn't request.");
 		sendCancelFileDownload(hash);
@@ -2984,15 +3067,13 @@ int NETrecvFile(NETQUEUE queue)
 	}
 
 	auto terminateFileDownload = [sendCancelFileDownload](std::vector<WZFile>::iterator &file) {
-		int noError = PHYSFS_close(file->handle);
-		if (noError == 0)
+		if (!file->closeFile())
 		{
 			debug(LOG_ERROR, "Could not close file handle after trying to terminate download: %s", WZ_PHYSFS_getLastError());
 		}
-		file->handle = nullptr;
 		PHYSFS_delete(file->filename.c_str());
 		sendCancelFileDownload(file->hash);
-		NetPlay.wzFiles.erase(file);
+		DownloadingWzFiles.erase(file);
 	};
 
 	//sanity checks
@@ -3021,7 +3102,7 @@ int NETrecvFile(NETQUEUE queue)
 		return 100;
 	}
 
-	if (PHYSFS_tell(file->handle) != static_cast<PHYSFS_sint64>(pos))
+	if (PHYSFS_tell(file->handle()) != static_cast<PHYSFS_sint64>(pos))
 	{
 		// actual position in file does not equal the expected position in the file (sent by the host)
 		debug(LOG_ERROR, "Invalid file position in downloaded file; (desired: %" PRIu32")", pos);
@@ -3030,19 +3111,17 @@ int NETrecvFile(NETQUEUE queue)
 	}
 
 	// Write packet to the file.
-	WZ_PHYSFS_writeBytes(file->handle, buf, bytesToRead);
+	WZ_PHYSFS_writeBytes(file->handle(), buf, bytesToRead);
 
 	uint32_t newPos = pos + bytesToRead;
 	file->pos = newPos;
 
 	if (newPos >= size)  // last packet
 	{
-		int noError = PHYSFS_close(file->handle);
-		if (noError == 0)
+		if (!file->closeFile())
 		{
 			debug(LOG_ERROR, "Could not close file handle after trying to save map: %s", WZ_PHYSFS_getLastError());
 		}
-		file->handle = nullptr;
 
 		if(!validateReceivedFile(*file))
 		{
@@ -3055,7 +3134,7 @@ int NETrecvFile(NETQUEUE queue)
 			markAsDownloadedFile(file->filename.c_str());
 		}
 
-		NetPlay.wzFiles.erase(file);
+		DownloadingWzFiles.erase(file);
 	}
 	// 'file' may now be an invalidated iterator.
 
@@ -3070,12 +3149,14 @@ int NETrecvFile(NETQUEUE queue)
 
 unsigned NETgetDownloadProgress(unsigned player)
 {
-	std::vector<WZFile> const &files = player == selectedPlayer ?
-		NetPlay.wzFiles :  // Check our own download progress.
-		NetPlay.players[player].wzFiles;  // Check their download progress (currently only works if we are the host).
+	std::vector<WZFile> const *files = player == selectedPlayer ?
+		&DownloadingWzFiles :  // Check our own download progress.
+		NetPlay.players[player].wzFiles.get();  // Check their download progress (currently only works if we are the host).
+
+	ASSERT_OR_RETURN(100, files != nullptr, "Uninitialized wzFiles? (Player %u)", player);
 
 	uint32_t progress = 100;
-	for (WZFile const &file : files)
+	for (WZFile const &file : *files)
 	{
 		progress = std::min<uint32_t>(progress, (uint32_t)((uint64_t)file.pos * 100 / (uint64_t)std::max<uint32_t>(file.size, 1)));
 	}
@@ -3867,7 +3948,7 @@ static void NETallowJoining()
 
 					char buf[250] = {'\0'};
 					const char* pPlayerType = (NetPlay.players[index].isSpectator) ? "Spectator" : "Player";
-					snprintf(buf, sizeof(buf), "%s %s has joined, IP is: %s", pPlayerType, name, NetPlay.players[index].IPtextAddress);
+					snprintf(buf, sizeof(buf), "%s[%" PRIu8 "] %s has joined, IP is: %s", pPlayerType, index, name, NetPlay.players[index].IPtextAddress);
 					debug(LOG_INFO, "%s", buf);
 					NETlogEntry(buf, SYNC_FLAG, index);
 
@@ -3907,7 +3988,14 @@ static void NETallowJoining()
 					NETregisterServer(WZ_SERVER_UPDATE);
 
 					// reset flags for new players
-					NetPlay.players[index].wzFiles.clear();
+					if (NetPlay.players[index].wzFiles)
+					{
+						NetPlay.players[index].wzFiles->clear();
+					}
+					else
+					{
+						ASSERT(false, "wzFiles is uninitialized?? (Player: %" PRIu8 ")", index);
+					}
 				}
 			}
 		}
@@ -4416,7 +4504,7 @@ bool NETjoinGame(const char *host, uint32_t port, const char *playername, bool a
 	{
 		return false;  // Connection dropped while sending NET_JOIN.
 	}
-	socketFlush(bsocket);  // Make sure the message was completely sent.
+	socketFlush(bsocket, NetPlay.hostPlayer);  // Make sure the message was completely sent.
 
 	i = wzGetTicks();
 	// Loop until we've been accepted into the game

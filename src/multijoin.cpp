@@ -283,7 +283,7 @@ static void resetMultiVisibility(UDWORD player)
 
 static void sendPlayerLeft(uint32_t playerIndex)
 {
-	ASSERT(NetPlay.isHost, "Only host should call this.");
+	ASSERT_OR_RETURN(, NetPlay.isHost, "Only host should call this.");
 
 	uint32_t forcedPlayerIndex = whosResponsible(playerIndex);
 	NETQUEUE(*netQueueType)(unsigned) = forcedPlayerIndex != selectedPlayer ? NETgameQueueForced : NETgameQueue;
@@ -324,7 +324,7 @@ void recvPlayerLeft(NETQUEUE queue)
 
 	NETsetPlayerConnectionStatus(CONNECTIONSTATUS_PLAYER_DROPPED, playerIndex);
 
-	debug(LOG_INFO, "** player %u has dropped, in-game!", playerIndex);
+	debug(LOG_INFO, "** player %u has dropped, in-game! (gameTime: %" PRIu32 ")", playerIndex, gameTime);
 	ActivityManager::instance().updateMultiplayGameData(game, ingame, NETGameIsLocked());
 }
 
@@ -359,14 +359,14 @@ bool MultiPlayerLeave(UDWORD playerIndex)
 	}
 	NetPlay.players[playerIndex].difficulty = AIDifficulty::DISABLED;
 
-	if (!NetPlay.players[playerIndex].wzFiles.empty())
+	if (NetPlay.players[playerIndex].wzFiles && NetPlay.players[playerIndex].fileSendInProgress())
 	{
 		char buf[256];
 
 		ssprintf(buf, _("File transfer has been aborted for %d.") , playerIndex);
 		addConsoleMessage(buf, DEFAULT_JUSTIFY, SYSTEM_MESSAGE);
 		debug(LOG_INFO, "=== File has been aborted for %d ===", playerIndex);
-		NetPlay.players[playerIndex].wzFiles.clear();
+		NetPlay.players[playerIndex].wzFiles->clear();
 	}
 
 	if (widgGetFromID(psWScreen, IDRET_FORM))
@@ -559,7 +559,7 @@ void ShowMOTD()
 	}
 	if (NetPlay.HaveUpgrade)
 	{
-		audio_PlayTrack(ID_SOUND_BUILD_FAIL);
+		audio_PlayBuildFailedOnce();
 		ssprintf(buf, "%s", _("There is an update to the game, please visit https://wz2100.net to download new version."));
 		addConsoleMessage(buf, DEFAULT_JUSTIFY, NOTIFY_MESSAGE);
 	}

@@ -3875,14 +3875,19 @@ std::vector<STRUCTURE_STATS *> fillStructureList(UDWORD _selectedPlayer, UDWORD 
 {
 	std::vector<STRUCTURE_STATS *> structureList;
 	UDWORD			inc;
-	bool			researchModule, factoryModule, powerModule;
 	STRUCTURE		*psCurr;
 	STRUCTURE_STATS	*psBuilding;
 
 	ASSERT_OR_RETURN(structureList, _selectedPlayer < MAX_PLAYERS, "_selectedPlayer = %" PRIu32 "", _selectedPlayer);
 
-	//check to see if able to build research/factory modules
-	researchModule = factoryModule = powerModule = false;
+	// counters for current nb of buildings, max buildings, current nb modules
+	int8_t researchLabCurrMax[] 	= {0, 0};
+	int8_t factoriesCurrMax[] 		= {0, 0};
+	int8_t vtolFactoriesCurrMax[] 	= {0, 0};
+	int8_t powerGenCurrMax[]		= {0, 0};
+	int8_t factoryModules 			= 0;
+	int8_t powerGenModules			= 0;
+	int8_t researchModules			= 0;
 
 	//if currently on a mission can't build factory/research/power/derricks
 	if (!missionIsOffworld())
@@ -3891,18 +3896,61 @@ std::vector<STRUCTURE_STATS *> fillStructureList(UDWORD _selectedPlayer, UDWORD 
 		{
 			if (psCurr->pStructureType->type == REF_RESEARCH && psCurr->status == SS_BUILT)
 			{
-				researchModule = true;
+				researchModules += psCurr->capacity;
 			}
 			else if (psCurr->pStructureType->type == REF_FACTORY && psCurr->status == SS_BUILT)
 			{
-				factoryModule = true;
+				factoryModules += psCurr->capacity;
 			}
 			else if (psCurr->pStructureType->type == REF_POWER_GEN && psCurr->status == SS_BUILT)
 			{
-				powerModule = true;
+				powerGenModules += psCurr->capacity;
+			}
+			else if (psCurr->pStructureType->type == REF_VTOL_FACTORY && psCurr->status == SS_BUILT)
+			{
+				// same as REF_FACTORY
+				factoryModules += psCurr->capacity;
 			}
 		}
 	}
+
+	// find maximum allowed limits (current built numbers already available, just grab them)
+	for (inc = 0; inc < numStructureStats; inc++)
+	{
+		if (apStructTypeLists[_selectedPlayer][inc] == AVAILABLE || (includeRedundantDesigns && apStructTypeLists[_selectedPlayer][inc] == REDUNDANT))
+		{
+			int8_t *counter;
+			if (asStructureStats[inc].type == REF_RESEARCH)
+			{
+				counter = researchLabCurrMax; 
+			}
+			else if (asStructureStats[inc].type == REF_FACTORY)
+			{
+				counter = factoriesCurrMax;
+			}
+			else if (asStructureStats[inc].type == REF_VTOL_FACTORY)
+			{
+				counter = vtolFactoriesCurrMax;
+			}
+			else if (asStructureStats[inc].type == REF_POWER_GEN)
+			{
+				counter = powerGenCurrMax;
+			}
+			else
+			{
+				continue;
+			}
+			counter[0] = asStructureStats[inc].curCount[_selectedPlayer];
+			counter[1] = asStructureStats[inc].upgrade[_selectedPlayer].limit;
+
+		}
+	}
+
+	debug(LOG_NEVER, "structures: RL %i/%i (%i), F %i/%i (%i), VF %i/%i, PG %i/%i (%i)",
+					researchLabCurrMax[0], researchLabCurrMax[1], researchModules,
+					factoriesCurrMax[0], factoriesCurrMax[1], factoryModules,
+					vtolFactoriesCurrMax[0], vtolFactoriesCurrMax[1],
+					powerGenCurrMax[0], powerGenCurrMax[1], powerGenModules);
 
 	//set the list of Structures to build
 	for (inc = 0; inc < numStructureStats; inc++)
@@ -3947,8 +3995,9 @@ std::vector<STRUCTURE_STATS *> fillStructureList(UDWORD _selectedPlayer, UDWORD 
 
 				if (psBuilding->type == REF_RESEARCH_MODULE)
 				{
-					//don't add to list if Research Facility not presently built
-					if (!researchModule)
+					//don't add to list if Research Facility not presently built 
+					//or if all labs already have a module
+					if (!researchLabCurrMax[0] || researchModules >= researchLabCurrMax[1])
 					{
 						continue;
 					}
@@ -3956,7 +4005,8 @@ std::vector<STRUCTURE_STATS *> fillStructureList(UDWORD _selectedPlayer, UDWORD 
 				else if (psBuilding->type == REF_FACTORY_MODULE)
 				{
 					//don't add to list if Factory not presently built
-					if (!factoryModule)
+					//or if all factories already have all possible modules
+					if (!factoriesCurrMax[0] || (factoryModules >= (factoriesCurrMax[1] + vtolFactoriesCurrMax[1]) * 2))
 					{
 						continue;
 					}
@@ -3964,7 +4014,8 @@ std::vector<STRUCTURE_STATS *> fillStructureList(UDWORD _selectedPlayer, UDWORD 
 				else if (psBuilding->type == REF_POWER_MODULE)
 				{
 					//don't add to list if Power Gen not presently built
-					if (!powerModule)
+					//or if all generators already have a module
+					if (!powerGenCurrMax[0] || (powerGenModules >= powerGenCurrMax[1]))
 					{
 						continue;
 					}
@@ -4239,8 +4290,9 @@ bool validLocation(BASE_STATS *psStats, Vector2i pos, uint16_t direction, unsign
 			{
 				STRUCTURE const *psStruct = getTileStructure(map_coord(pos.x), map_coord(pos.y));
 				if (psStruct && (psStruct->pStructureType->type == REF_FACTORY ||
-				                 psStruct->pStructureType->type == REF_VTOL_FACTORY) &&
-				    psStruct->status == SS_BUILT && aiCheckAlliances(player, psStruct->player))
+				                 psStruct->pStructureType->type == REF_VTOL_FACTORY) 
+					&& psStruct->status == SS_BUILT && aiCheckAlliances(player, psStruct->player)
+					&& nextModuleToBuild(psStruct, -1) > 0)
 				{
 					break;
 				}
@@ -4250,8 +4302,10 @@ bool validLocation(BASE_STATS *psStats, Vector2i pos, uint16_t direction, unsign
 			if (TileHasStructure(worldTile(pos)))
 			{
 				STRUCTURE const *psStruct = getTileStructure(map_coord(pos.x), map_coord(pos.y));
-				if (psStruct && psStruct->pStructureType->type == REF_RESEARCH &&
-				    psStruct->status == SS_BUILT && aiCheckAlliances(player, psStruct->player))
+				if (psStruct && psStruct->pStructureType->type == REF_RESEARCH 
+					&& psStruct->status == SS_BUILT 
+					&& aiCheckAlliances(player, psStruct->player)
+					&& nextModuleToBuild(psStruct, -1) > 0)
 				{
 					break;
 				}
@@ -4261,8 +4315,10 @@ bool validLocation(BASE_STATS *psStats, Vector2i pos, uint16_t direction, unsign
 			if (TileHasStructure(worldTile(pos)))
 			{
 				STRUCTURE const *psStruct = getTileStructure(map_coord(pos.x), map_coord(pos.y));
-				if (psStruct && psStruct->pStructureType->type == REF_POWER_GEN &&
-				    psStruct->status == SS_BUILT && aiCheckAlliances(player, psStruct->player))
+				if (psStruct && psStruct->pStructureType->type == REF_POWER_GEN 
+					&& psStruct->status == SS_BUILT 
+					&& aiCheckAlliances(player, psStruct->player)
+					&& nextModuleToBuild(psStruct, -1) > 0)
 				{
 					break;
 				}
@@ -5298,7 +5354,7 @@ void printStructureInfo(STRUCTURE *psStructure)
 			        getStatsName(psStructure->pStructureType), assigned_droids, psStructure->body, structureBody(psStructure));
 			if (dbgInputManager.debugMappingsAllowed())
 			{
-				console("ID %d - sensor range %d - ECM %d", psStructure->id, structSensorRange(psStructure), structJammerPower(psStructure));
+				console(_("ID %d - sensor range %d - ECM %d"), psStructure->id, structSensorRange(psStructure), structJammerPower(psStructure));
 			}
 			break;
 		}
@@ -5322,7 +5378,7 @@ void printStructureInfo(STRUCTURE *psStructure)
 		}
 		if (dbgInputManager.debugMappingsAllowed())
 		{
-			console("ID %d - armour %d|%d - sensor range %d - ECM %d - born %u - depth %.02f",
+			console(_("ID %d - armour %d|%d - sensor range %d - ECM %d - born %u - depth %.02f"),
 			        psStructure->id, objArmour(psStructure, WC_KINETIC), objArmour(psStructure, WC_HEAT),
 			        structSensorRange(psStructure), structJammerPower(psStructure), psStructure->born, psStructure->foundationDepth);
 		}
@@ -5331,14 +5387,14 @@ void printStructureInfo(STRUCTURE *psStructure)
 		console(_("%s - Hitpoints %d/%d"), getStatsName(psStructure->pStructureType), psStructure->body, structureBody(psStructure));
 		if (dbgInputManager.debugMappingsAllowed())
 		{
-			console("ID %d - Queue %d", psStructure->id, psStructure->pFunctionality->repairFacility.droidQueue);
+			console(_("ID %d - Queue %d"), psStructure->id, psStructure->pFunctionality->repairFacility.droidQueue);
 		}
 		break;
 	case REF_RESOURCE_EXTRACTOR:
 		console(_("%s - Hitpoints %d/%d"), getStatsName(psStructure->pStructureType), psStructure->body, structureBody(psStructure));
 		if (dbgInputManager.debugMappingsAllowed() && selectedPlayer < MAX_PLAYERS)
 		{
-			console("ID %d - %s", psStructure->id, (auxTile(map_coord(psStructure->pos.x), map_coord(psStructure->pos.y), selectedPlayer) & AUXBITS_DANGER) ? "danger" : "safe");
+			console(_("ID %d - %s"), psStructure->id, (auxTile(map_coord(psStructure->pos.x), map_coord(psStructure->pos.y), selectedPlayer) & AUXBITS_DANGER) ? "danger" : "safe");
 		}
 		break;
 	case REF_POWER_GEN:
@@ -5355,7 +5411,7 @@ void printStructureInfo(STRUCTURE *psStructure)
 		        NUM_POWER_MODULES, psStructure->body, structureBody(psStructure));
 		if (dbgInputManager.debugMappingsAllowed())
 		{
-			console("ID %u - Multiplier: %u", psStructure->id, getBuildingPowerPoints(psStructure));
+			console(_("ID %u - Multiplier: %u"), psStructure->id, getBuildingPowerPoints(psStructure));
 		}
 		break;
 	case REF_CYBORG_FACTORY:
@@ -5364,7 +5420,7 @@ void printStructureInfo(STRUCTURE *psStructure)
 		console(_("%s - Hitpoints %d/%d"), getStatsName(psStructure->pStructureType), psStructure->body, structureBody(psStructure));
 		if (dbgInputManager.debugMappingsAllowed())
 		{
-			console("ID %u - Production Output: %u - BuildPointsRemaining: %u - Resistance: %d / %d", psStructure->id,
+			console(_("ID %u - Production Output: %u - BuildPointsRemaining: %u - Resistance: %d / %d"), psStructure->id,
 			        getBuildingProductionPoints(psStructure), psStructure->pFunctionality->factory.buildPointsRemaining,
 			        psStructure->resistance, structureResistance(psStructure->pStructureType, psStructure->player));
 		}
@@ -5373,14 +5429,14 @@ void printStructureInfo(STRUCTURE *psStructure)
 		console(_("%s - Hitpoints %d/%d"), getStatsName(psStructure->pStructureType), psStructure->body, structureBody(psStructure));
 		if (dbgInputManager.debugMappingsAllowed())
 		{
-			console("ID %u - Research Points: %u", psStructure->id, getBuildingResearchPoints(psStructure));
+			console(_("ID %u - Research Points: %u"), psStructure->id, getBuildingResearchPoints(psStructure));
 		}
 		break;
 	case REF_REARM_PAD:
 		console(_("%s - Hitpoints %d/%d"), getStatsName(psStructure->pStructureType), psStructure->body, structureBody(psStructure));
 		if (dbgInputManager.debugMappingsAllowed())
 		{
-			console("tile %d,%d - target %s", psStructure->pos.x / TILE_UNITS, psStructure->pos.y / TILE_UNITS,
+			console(_("tile %d,%d - target %s"), psStructure->pos.x / TILE_UNITS, psStructure->pos.y / TILE_UNITS,
 			        objInfo(psStructure->pFunctionality->rearmPad.psObj));
 		}
 		break;
@@ -5388,7 +5444,7 @@ void printStructureInfo(STRUCTURE *psStructure)
 		console(_("%s - Hitpoints %d/%d"), getStatsName(psStructure->pStructureType), psStructure->body, structureBody(psStructure));
 		if (dbgInputManager.debugMappingsAllowed())
 		{
-			console("ID %u - sensor range %d - ECM %d", psStructure->id, structSensorRange(psStructure), structJammerPower(psStructure));
+			console(_("ID %u - sensor range %d - ECM %d"), psStructure->id, structSensorRange(psStructure), structJammerPower(psStructure));
 		}
 		break;
 	}

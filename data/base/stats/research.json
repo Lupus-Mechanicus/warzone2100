@@ -126,9 +126,6 @@
 		"requiredResearch": [
 			"R-Struc-CommandRelay"
 		],
-		"requiredStructures": [
-			"A0ComDroidControl"
-		],
 		"researchPoints": 1200,
 		"researchPower": 37,
 		"resultComponents": [
@@ -7276,7 +7273,7 @@
 		"id": "R-Sys-Resistance-Upgrade04",
 		"imdName": "ICCCCONS.PIE",
 		"msgName": "RES_SY_RESU5",
-		"name": "NEXUS Resistance Circuits Mk4",
+		"name": "NEXUS Immunization System",
 		"requiredResearch": [
 			"R-Sys-Resistance-Upgrade03"
 		],

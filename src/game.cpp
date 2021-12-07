@@ -102,6 +102,16 @@
 
 #define UNUSED(x) (void)(x)
 
+// Ignore unused functions for now (until full cleanup of old binary savegame .gam writing)
+#if defined( _MSC_VER )
+# pragma warning( disable : 4505 ) // warning C4505: unreferenced function with internal linkage has been removed
+#endif
+#if defined(__clang__)
+# pragma clang diagnostic ignored "-Wunused-function"
+#elif defined(__GNUC__)
+# pragma GCC diagnostic ignored "-Wunused-function"
+#endif
+
 bool saveJSONToFile(const nlohmann::json& obj, const char* pFileName)
 {
 	std::ostringstream stream;
@@ -2842,7 +2852,7 @@ bool loadGame(const char *pGameToLoad, bool keepObjects, bool freeMem, bool User
 	mapSeed = gameRandU32();
 	data = WzMap::Map::loadFromPath(aFileName, getWzMapType(UserSaveGame), game.maxPlayers, mapSeed, false, std::unique_ptr<WzMap::LoggingProtocol>(new WzMapDebugLogger()), std::unique_ptr<WzMapPhysFSIO>(new WzMapPhysFSIO()));
 
-	if (data->wasScriptGenerated())
+	if (data && data->wasScriptGenerated())
 	{
 		// Log the random seed used to generate this instance of the map
 		debug(LOG_INFO, "Loaded script-generated map \"%s\" with random seed: %" PRIu32, aFileName, mapSeed);
@@ -3601,11 +3611,11 @@ static bool gameLoad(const char *fileName)
 {
 	char CurrentFileName[PATH_MAX];
 	strcpy(CurrentFileName, fileName);
-	GAME_SAVEHEADER fileHeader;
+	GAME_SAVEHEADER fileHeader = {};
 	auto gamJsonSave = readGamJson(fileName);
 	debug(LOG_SAVEGAME, "loading %s", fileName);
-	PHYSFS_file *fileHandle = openLoadFile(fileName, true);
-	if (!gamJsonSave.has_value())
+	PHYSFS_file *fileHandle = openLoadFile(fileName, false);
+	if (!gamJsonSave.has_value() && fileHandle)
 	{
 		// haven't converted .gam to .json yet!
 		// Read the header from the file
@@ -3615,7 +3625,8 @@ static bool gameLoad(const char *fileName)
 			PHYSFS_close(fileHandle);
 			return false;
 		}
-	} else
+	}
+	else if (gamJsonSave.has_value())
 	{
 		// be compatible with .gam logic
 		fileHeader.version = gamJsonSave.value().at("version").get<uint32_t>();
@@ -3896,14 +3907,16 @@ static UDWORD getCampaignV(PHYSFS_file *fileHandle, unsigned int version, nonstd
 // -----------------------------------------------------------------------------------------
 // Returns the campaign number  --- apparently this is does alot less than it look like
 /// it now does even less than it looks like on the psx ... cause its pc only
+/// 2021-11: This appears to be useless, as scripts set the campaign number... Probably can & should remove this completely?
 UDWORD getCampaign(const char *fileName)
 {
 	GAME_SAVEHEADER fileHeader;
 	auto gamJson = readGamJson(fileName);
-	PHYSFS_file *fileHandle = openLoadFile(fileName, true);
+	PHYSFS_file *fileHandle = openLoadFile(fileName, false);
 	if (!fileHandle)
 	{
-		// Failure to open the file is a failure to load the specified savegame
+		// Failure to open the file *may NOT be* a failure to load the specified savegame
+		// TODO: If this really is needed, we need to add the new JSON format parsing here... but this whole function appears to be useless??
 		return false;
 	}
 
@@ -4704,28 +4717,15 @@ static bool writeMainFile(const std::string &fileName, SDWORD saveType)
 
 	return true;
 }
-//-- Write gam.json AND old binary .gam
-//-- We create both for migration period, so both can be inspected if needed
-//-- (also, it's less invasive than modifying "isASavedGamefile" logic)
+
+//-- Write gam.json
 //--
-//-- Note: only .json gets really loaded!
-//--
-//-- TODO: remove .gam entirely at some future release, breaking compatibility
 static bool writeGameFile(const char *fileName, SDWORD saveType)
 {
 	GAME_SAVEHEADER fileHeader;
 	SAVE_GAME       saveGame;
-	bool            status;
 	unsigned int    i, j;
 
-	PHYSFS_file *fileHandle = openSaveFile(fileName);
-	if (!fileHandle)
-	{
-		debug(LOG_ERROR, "openSaveFile(\"%s\") failed", fileName);
-		return false;
-	}
-
-	WZ_PHYSFS_SETBUFFER(fileHandle, 4096)//;
 	fileHeader.aFileType[0] = 'g';
 	fileHeader.aFileType[1] = 'a';
 	fileHeader.aFileType[2] = 'm';
@@ -4734,13 +4734,6 @@ static bool writeGameFile(const char *fileName, SDWORD saveType)
 	fileHeader.version = CURRENT_VERSION_NUM;
 
 	debug(LOG_SAVE, "fileversion is %u, (%s) ", fileHeader.version, fileName);
-
-	if (!serializeSaveGameHeader(fileHandle, &fileHeader))
-	{
-		debug(LOG_ERROR, "could not write header to %s; PHYSFS error: %s", fileName, WZ_PHYSFS_getLastError());
-		PHYSFS_close(fileHandle);
-		return false;
-	}
 
 	ASSERT(saveType == GTYPE_SAVE_START || saveType == GTYPE_SAVE_MIDMISSION, "invalid save type");
 	saveGame.saveKey = getCampaignNumber();
@@ -4907,8 +4900,6 @@ static bool writeGameFile(const char *fileName, SDWORD saveType)
 	}
 	const std::string saveInfoJsonFilename = pathToThisSaveDir + "save-info.json";
 	const std::string jsonFileName = pathToThisSaveDir + gameName + ".json";
-	// old .gam file
-	status = serializeSaveGameData(fileHandle, &saveGame);
 	auto gamJson = nlohmann::json::object();
 	
 	if (!PHYSFS_exists(saveInfoJsonFilename.c_str()))
@@ -4922,12 +4913,20 @@ static bool writeGameFile(const char *fileName, SDWORD saveType)
 	auto saveInfoJson = saveInfoJsonOpt.value();
 	// new .json format
 	serializeSaveGameData_json(gamJson, saveInfoJson, gameName.c_str(), &saveGame);
-	saveJSONToFile(gamJson, jsonFileName.c_str());
-	saveJSONToFile(saveInfoJson, saveInfoJsonFilename.c_str());
+	if (!saveJSONToFile(gamJson, jsonFileName.c_str()))
+	{
+		debug(LOG_ERROR, "Failed to save: %s", jsonFileName.c_str());
+		return false;
+	}
+	if (!saveJSONToFile(saveInfoJson, saveInfoJsonFilename.c_str()))
+	{
+		debug(LOG_ERROR, "Failed to save: %s", saveInfoJsonFilename.c_str());
+		return false;
+	}
 	debug(LOG_SAVEGAME, "saved game into %s", jsonFileName.c_str());
 
 	// Return our success status with writing out the file!
-	return status;
+	return true;
 }
 
 static nonstd::optional<nlohmann::json> readGamJson(const char* filenameWithGamExtension)
